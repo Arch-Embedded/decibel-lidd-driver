@@ -76,22 +76,7 @@
 	};
 	
 	fragment@1 {
-		target-path="/";
-		__overlay__ {
-		/* avoid stupid warning */
-		#address-cells = <1>;
-		#size-cells = <1>;
-			llid-lcd {
-				status = "okay";
-				compatible = "ti,am33xx-llid,llid-lcd";
-				pinctrl-names = "default";
-				pinctrl-0 = <&bb_lcd_lcd_pins>;
-			};
-		};
-	};
-	
-	fragment@2 {
-		target = <&ocp>;
+		target = <&ocp>; 
 		__overlay__ {
 		#address-cells = <1>;
 		#size-cells = <1>;
@@ -104,6 +89,6 @@
 				/*ti,hwmods = "lcdc";*/
 				status = "okay";
 			};
-		};
+		}; 
 	};
 };
