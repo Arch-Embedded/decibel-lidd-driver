@@ -83,6 +83,8 @@
 		/*ranges = <0x4830e000 0x1000>;*/
 			llid_regs: llid_regs@4830e000 {
 				compatible = "ti,am33xx-llid,llid-lcd";
+				pinctrl-names = "default";
+				pinctrl-0 = <&bb_lcd_lcd_pins>;
 				reg = <0x4830e000 0x1000>;
 				interrupt-parent = <&intc>;
 				interrupts = <36>;

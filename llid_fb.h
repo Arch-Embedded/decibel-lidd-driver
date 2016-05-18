@@ -149,6 +149,10 @@ struct llid_par {
 	int rev;                 /* IP revision */
 	void __iomem *mmio;
 	struct clk *lcdc_clk;			//Power enable for the LCDC
+#ifdef CONFIG_CPU_FREQ
+	struct notifier_block freq_transition;
+	unsigned int lcd_fck_rate;
+#endif
 	//DMA/Memory things
 	int 				irq;		//irq resource number
 	dma_addr_t			vram_phys;	//should be same as dma_start
