@@ -9,7 +9,9 @@
 #include <linux/fb.h>
 #include <linux/spinlock.h>
 #include <linux/platform_device.h>
+#include <generated/autoconf.h>
 #include <linux/clk.h>
+#include <linux/cpufreq.h>
 #include <linux/pm_runtime.h>
 //#include <errno.h>
 
@@ -72,8 +74,11 @@ static int tillid_pdev_probe(struct platform_device *pdev) {
 
 	pr_debug("Functional clk finished");
 
+	pm_runtime_enable(&pdev->dev);
+	pm_runtime_irq_safe(&pdev->dev);
+
 	/* Determine LCD IP Version */
-		//pm_runtime_get_sync(&pdev->dev);
+	pm_runtime_get_sync(&pdev->dev);
 
 	dev_warn(&pdev->dev, "PID Reg value 0x%08x, ",
 			reg_read(priv, LCDC_PID_REG));
@@ -146,4 +151,5 @@ MODULE_AUTHOR("Cezary Gapinski");
 MODULE_DESCRIPTION("TI LLID LCD Module");
 MODULE_LICENSE("GPL");
 MODULE_VERSION("0.1");
+
 

@@ -86,7 +86,7 @@
 				reg = <0x4830e000 0x1000>;
 				interrupt-parent = <&intc>;
 				interrupts = <36>;
-				/*ti,hwmods = "lcdc";*/
+				ti,hwmods = "lcdc";
 				status = "okay";
 			};
 		}; 
