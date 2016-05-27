@@ -122,6 +122,7 @@ struct llid_par {
 	struct platform_device *pdev;
 	struct fb_info *info;
 	struct llid_platform_data *pdata;
+	struct gpio_desc *enable_gpio;
 	u32 pseudo_palette[16];
 	struct {
 		void *buf;
@@ -148,6 +149,7 @@ struct llid_par {
 	void *extra;
 	int rev;                 /* IP revision */
 	void __iomem *mmio;
+	struct display_timings *timings;
 	struct clk *lcdc_clk;			//Power enable for the LCDC
 #ifdef CONFIG_CPU_FREQ
 	struct notifier_block freq_transition;
