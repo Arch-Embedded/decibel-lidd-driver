@@ -42,7 +42,8 @@
 		"P8.29",	/* lcd: lcd_hsync */
 		"P8.28",	/* lcd: lcd_pclk */
 		"P8.30",	/* lcd: lcd_ac_bias_en */
-		"P9.27";	/* lcd: gpio3_19 DISPEN */
+		"P9.27",	/* lcd: gpio3_19 DISPEN */
+		"P9.25";	/* temporary diagnostic change state detector */ 
 
 	fragment@0 {
 		target = <&am33xx_pinmux>;
@@ -51,23 +52,24 @@
 			bb_lcd_lcd_pins: pinmux_bb_lcd_lcd_pins {
 				pinctrl-single,pins = <
 					BONE_P9_27 (PIN_OUTPUT_PULLUP | MUX_MODE7) /* mcasp0_fsr.gpio3_19 */
+					BONE_P9_25 (PIN_INPUT_PULLUP | MUX_MODE7) /* gpio3_21 */
 					
-					BONE_P8_45 (PIN_OUTPUT | MUX_MODE0) /* lcd_data0.lcd_data0 */
-					BONE_P8_46 (PIN_OUTPUT | MUX_MODE0) /* lcd_data1.lcd_data1 */
-					BONE_P8_43 (PIN_OUTPUT | MUX_MODE0) /* lcd_data2.lcd_data2 */
-					BONE_P8_44 (PIN_OUTPUT | MUX_MODE0) /* lcd_data3.lcd_data3 */
-					BONE_P8_41 (PIN_OUTPUT | MUX_MODE0) /* lcd_data4.lcd_data4 */
-					BONE_P8_42 (PIN_OUTPUT | MUX_MODE0) /* lcd_data5.lcd_data5 */
-					BONE_P8_39 (PIN_OUTPUT | MUX_MODE0) /* lcd_data6.lcd_data6 */
-					BONE_P8_40 (PIN_OUTPUT | MUX_MODE0) /* lcd_data7.lcd_data7 */
-					BONE_P8_37 (PIN_OUTPUT | MUX_MODE0) /* lcd_data8.lcd_data8 */
-					BONE_P8_38 (PIN_OUTPUT | MUX_MODE0) /* lcd_data9.lcd_data9 */
-					BONE_P8_36 (PIN_OUTPUT | MUX_MODE0) /* lcd_data10.lcd_data10 */
-					BONE_P8_34 (PIN_OUTPUT | MUX_MODE0) /* lcd_data11.lcd_data11 */
-					BONE_P8_35 (PIN_OUTPUT | MUX_MODE0) /* lcd_data12.lcd_data12 */
-					BONE_P8_33 (PIN_OUTPUT | MUX_MODE0) /* lcd_data13.lcd_data13 */
-					BONE_P8_31 (PIN_OUTPUT | MUX_MODE0) /* lcd_data14.lcd_data14 */
-					BONE_P8_32 (PIN_OUTPUT | MUX_MODE0) /* lcd_data15.lcd_data15 */
+					BONE_P8_45 (PIN_INPUT | MUX_MODE0) /* lcd_data0.lcd_data0 */
+					BONE_P8_46 (PIN_INPUT | MUX_MODE0) /* lcd_data1.lcd_data1 */
+					BONE_P8_43 (PIN_INPUT | MUX_MODE0) /* lcd_data2.lcd_data2 */
+					BONE_P8_44 (PIN_INPUT | MUX_MODE0) /* lcd_data3.lcd_data3 */
+					BONE_P8_41 (PIN_INPUT | MUX_MODE0) /* lcd_data4.lcd_data4 */
+					BONE_P8_42 (PIN_INPUT | MUX_MODE0) /* lcd_data5.lcd_data5 */
+					BONE_P8_39 (PIN_INPUT | MUX_MODE0) /* lcd_data6.lcd_data6 */
+					BONE_P8_40 (PIN_INPUT | MUX_MODE0) /* lcd_data7.lcd_data7 */
+					BONE_P8_37 (PIN_INPUT | MUX_MODE0) /* lcd_data8.lcd_data8 */
+					BONE_P8_38 (PIN_INPUT | MUX_MODE0) /* lcd_data9.lcd_data9 */
+					BONE_P8_36 (PIN_INPUT | MUX_MODE0) /* lcd_data10.lcd_data10 */
+					BONE_P8_34 (PIN_INPUT | MUX_MODE0) /* lcd_data11.lcd_data11 */
+					BONE_P8_35 (PIN_INPUT | MUX_MODE0) /* lcd_data12.lcd_data12 */
+					BONE_P8_33 (PIN_INPUT | MUX_MODE0) /* lcd_data13.lcd_data13 */
+					BONE_P8_31 (PIN_INPUT | MUX_MODE0) /* lcd_data14.lcd_data14 */
+					BONE_P8_32 (PIN_INPUT | MUX_MODE0) /* lcd_data15.lcd_data15 */
 
 					BONE_P8_27 (PIN_OUTPUT | MUX_MODE0) /* lcd_vsync.lcd_vsync */
 					BONE_P8_29 (PIN_OUTPUT | MUX_MODE0) /* lcd_hsync.lcd_hsync */
@@ -89,6 +91,7 @@
 				pinctrl-names = "default";
 				pinctrl-0 = <&bb_lcd_lcd_pins>;
 				enable-gpios = <&gpio3 19 0>;
+				input-gpios = <&gpio3 21 1>;
 				reg = <0x4830e000 0x1000>;
 				interrupt-parent = <&intc>;
 				interrupts = <36>;

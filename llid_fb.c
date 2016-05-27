@@ -17,12 +17,14 @@
 #include <linux/pm_runtime.h>
 #include <video/display_timing.h>
 #include <video/of_display_timing.h>
+#include <linux/gpio.h>                 // Required for the GPIO functions
+#include <linux/interrupt.h>            // Required for the IRQ code
 //#include <errno.h>
 
 #include "llid_fb.h"
 #include "llid_fb_regs.h"
 
-static struct llid_par *display_params;
+static struct llid_par *display_params = NULL;
 
 //static struct fb_fix_screeninfo ssd1289_fix __initdata = {
 //	.id          = DRIVER_NAME,
@@ -46,6 +48,9 @@ static struct llid_par *display_params;
 //	.width		= 240,
 //	.vmode		= FB_VMODE_NONINTERLACED,
 //};
+
+/// Function prototype for the custom IRQ handler function -- see below for the implementation
+static irq_handler_t  ebbgpio_irq_handler(unsigned int irq, void *dev_id, struct pt_regs *regs);
 
 static void __init ssd1289_setup(struct llid_par *item)
 {
@@ -166,6 +171,7 @@ static int tillid_pdev_probe(struct platform_device *pdev) {
 		return -ENOMEM;
 	}
 
+	if(!display_params)
 	display_params = priv;
 
 	pr_debug("Kzalloc allocated\n");
@@ -202,6 +208,37 @@ static int tillid_pdev_probe(struct platform_device *pdev) {
 
 	pr_debug("GPIO enable pin set to 1 finished\n");
 
+	priv->input_test_gpio = devm_gpiod_get(&pdev->dev, "input");
+	if (IS_ERR(priv->input_test_gpio)) {
+			dev_err(&pdev->dev, "failed to request input test GPIO\n");
+			goto fail_iounmap;
+	} else {
+		ret = gpiod_direction_input(priv->input_test_gpio);
+		if (ret < 0) {
+			dev_err(&pdev->dev, "failed to setup input test GPIO\n");
+			goto fail_iounmap;
+		}
+		dev_info(&pdev->dev, "found input test GPIO\n");
+	}
+
+	pr_debug("GPIO input test pin configuration finished\n");
+
+	// GPIO numbers and IRQ numbers are not the same! This function performs the mapping for us
+	priv->irqNumber = gpiod_to_irq(priv->input_test_gpio);
+	printk(KERN_INFO "GPIO_TEST: The button is mapped to IRQ: %d\n", priv->irqNumber);
+
+	// This next call requests an interrupt line
+	ret = request_irq(priv->irqNumber,             // The interrupt number requested
+	                  (irq_handler_t) ebbgpio_irq_handler, // The pointer to the handler function below
+	                  IRQF_TRIGGER_FALLING,   // Interrupt on rising edge (button press, not release)
+	                  "ebb_gpio_handler",    // Used in /proc/interrupts to identify the owner
+	                  NULL);                 // The *dev_id for shared interrupt lines, NULL is okay
+
+	if(ret) {
+		printk(KERN_INFO "GPIO_TEST: The interrupt request result is: %d\n", ret);
+		goto fail_iounmap;
+	}
+
 	priv->lcdc_clk = clk_get(&pdev->dev, "fck");
 	if (IS_ERR(priv->lcdc_clk)) {
 		dev_err(&pdev->dev, "failed to get functional clock\n");
@@ -236,7 +273,8 @@ static int tillid_pdev_probe(struct platform_device *pdev) {
 	}
 
 	//Setting up AM335X LCDC Controller
-	cfg = LCDC_V2_DMA_CLK_EN | LCDC_V2_LIDD_CLK_EN | LCDC_V2_CORE_CLK_EN; // Turn on LIDD clock and DMA clock, core clock doesn't help DMA :( ?
+//	cfg = LCDC_V2_DMA_CLK_EN | LCDC_V2_LIDD_CLK_EN | LCDC_V2_CORE_CLK_EN; // Turn on LIDD clock and DMA clock, core clock doesn't help DMA :( ?
+	cfg = LCDC_V2_LIDD_CLK_EN;
 	reg_write(priv, LCDC_CLK_ENABLE_REG, cfg);
 	cfg = 0 | LCDC_CLK_DIVISOR(6);						// LCDC Mode = LIDD
 	reg_write(priv, LCDC_CTRL_REG, cfg);
@@ -294,9 +332,13 @@ static int tillid_pdev_remove(struct platform_device *pdev) {
 
 	struct llid_par *priv = display_params;
 
+	free_irq(priv->irqNumber, NULL);               // Free the IRQ number, no *dev_id required in this case
+
+
 	if(priv->lcdc_clk)
 		clk_disable(priv->lcdc_clk);
 
+	pm_runtime_put_sync(&pdev->dev);
 	pm_runtime_put_sync(&pdev->dev);
 	pm_runtime_disable(&pdev->dev);
 	if (priv->lcdc_clk)
@@ -305,7 +347,8 @@ static int tillid_pdev_remove(struct platform_device *pdev) {
 	if (priv->mmio)
 		iounmap(priv->mmio);
 
-	kfree(priv);
+	if(display_params)
+		kfree(display_params);
 
 	return 0;
 }
@@ -330,6 +373,11 @@ static int __init tillid_fb_init(void) {
 static void __exit tillid_fb_fini(void) {
 	pr_debug("Exit tillid\n");
 	platform_driver_unregister(&tillid_platform_driver);
+}
+
+static irq_handler_t ebbgpio_irq_handler(unsigned int irq, void *dev_id, struct pt_regs *regs){
+	pr_debug("We are in interrupt\n");
+   return (irq_handler_t) IRQ_HANDLED;      // Announce that the IRQ has been handled correctly
 }
 
 module_init(tillid_fb_init);

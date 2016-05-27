@@ -123,6 +123,8 @@ struct llid_par {
 	struct fb_info *info;
 	struct llid_platform_data *pdata;
 	struct gpio_desc *enable_gpio;
+	struct gpio_desc *input_test_gpio;
+	unsigned int irqNumber;
 	u32 pseudo_palette[16];
 	struct {
 		void *buf;
