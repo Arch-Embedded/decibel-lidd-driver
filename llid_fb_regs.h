@@ -191,4 +191,9 @@ static inline unsigned int ssd1289_reg_get(struct llid_par *item, unsigned char 
 	return reg_read(item,LCD_LIDD_CS0_DATA);
 }
 
+static inline void LCD_WriteRAM_Prepare(struct llid_par *item)
+{
+	reg_write(item, LCD_LIDD_CS0_ADDR, (unsigned int)SSD1289_REG_GDDRAM_DATA);
+}
+
 #endif /* LLID_FB_REGS_H_ */
