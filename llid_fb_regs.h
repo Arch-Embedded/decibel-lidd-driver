@@ -66,6 +66,15 @@
 #define LCDC_INVERT_VSYNC                        BIT(20)
 #define LCDC_LPP_B10                             BIT(26)
 
+/* LCD_CS_CONF position helpers */
+#define CONF_TA_POS 0
+#define R_HOLD_POS 2
+#define R_STROBE_POS 6
+#define R_SU_POS 12
+#define W_HOLD_POS 17
+#define W_STROBE_POS 21
+#define W_SU_POS 27
+
 /* LCDC Block */
 #define LCDC_PID_REG                             0x0
 #define LCDC_CTRL_REG                            0x4
