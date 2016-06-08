@@ -75,6 +75,11 @@ static void lcd_context_save(struct llid_par* item);
 static void lcd_context_restore(struct llid_par* item);
 
 static int __init lidd_video_alloc(struct llid_par *item);
+static int lcd_cfg_dma(struct llid_par *item, int burst_size,  int fifo_th);
+
+static void lidd_dma_setstatus(struct llid_par *item, int doenable);
+static irqreturn_t ssd1289_irq_handler(int irq, void *arg);
+static void ssd1289_dma_setstatus(struct llid_par *item, int doenable);
 
 static void LCD_Clear(struct llid_par *item, uint16_t Color);
 static void LCD_SetCursor(struct llid_par *item, uint16_t Xpos,uint16_t Ypos);
@@ -292,7 +297,7 @@ static int tillid_pdev_probe(struct platform_device *pdev) {
 	pm_set_vt_switch(0);
 
 	pr_debug("pm_set_vt_switched\n");
-	pm_runtime_irq_safe(&pdev->dev);
+	//pm_runtime_irq_safe(&pdev->dev);
 	pr_debug("pm_runtime_irq_safed\n");
 	pm_runtime_get_sync(&pdev->dev);
 	pr_debug("pm_get sync\n");
@@ -389,10 +394,50 @@ static int tillid_pdev_probe(struct platform_device *pdev) {
 		goto out_info;
 	}
 
+	// Set up all kinds of fun DMA
+	reg_write(priv, LCDC_DMA_CTRL_REG, 0);					// Start out with a blank slate
+	lcd_cfg_dma(priv, 16, 0);								// DMA burst and FIFO threshold
+	cfg = LCDC_V2_UNDERFLOW_INT_ENA | LCDC_SYNC_LOST | LCD_V2_DONE_INT_ENA;
+	reg_write(priv, LCDC_INT_ENABLE_SET_REG, cfg);
+
+	reg_write(priv, LCDC_DMA_FB_BASE_ADDR_0_REG, priv->dma_start);
+	reg_write(priv, LCDC_DMA_FB_CEILING_ADDR_0_REG, priv->dma_end);
+	reg_write(priv, LCDC_DMA_FB_BASE_ADDR_1_REG, priv->dma_start);
+	reg_write(priv, LCDC_DMA_FB_CEILING_ADDR_1_REG, priv->dma_end);
+
 	pr_debug("Finished video alloc\n");
+
+	info->fbops = &ssd1289_fbops;
+	ret = register_framebuffer(info);
+	if (ret < 0) {
+		ret = -EIO;
+		dev_err(&pdev->dev,
+			"%s: unable to register_frambuffer\n", __func__);
+		goto out_pages;
+	}
+	dev_dbg(&pdev->dev, "Registered framebuffer.\n");
+
+	// Set up LCD coordinates as necessary
+	ssd1289_reg_set(priv, SSD1289_REG_GDDRAM_X_ADDR, 0);
+	ssd1289_reg_set(priv, SSD1289_REG_GDDRAM_Y_ADDR, 0);
+	reg_write(priv, LCD_LIDD_CS0_ADDR, SSD1289_REG_GDDRAM_DATA);	//set up for data before DMA begins
+
+	// Try to get IRQ for DMA
+	ret = request_irq(priv->irq, ssd1289_irq_handler, 0,
+				DRIVER_NAME, priv);
+	if (ret) {
+		ret = -EIO;
+		goto out_framebuffer;
+	}
+
+	ssd1289_dma_setstatus(priv, 1);	//enable DMA
 
 	return 0;
 
+out_framebuffer:
+	unregister_framebuffer(info);
+out_pages:
+	kfree((void *)priv->info->fix.smem_start);
 out_info:
 	framebuffer_release(info);
 out_clk_enable:
@@ -421,8 +466,6 @@ static int tillid_pdev_remove(struct platform_device *pdev) {
 		framebuffer_release(priv->info);
 	}
 
-	pm_runtime_put_sync(&pdev->dev);
-
 	if (priv->lcdc_clk)
 		clk_disable(priv->lcdc_clk);
 
@@ -435,12 +478,102 @@ static int tillid_pdev_remove(struct platform_device *pdev) {
 	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
 	release_mem_region(res->start, resource_size(res));
 
+	platform_set_drvdata(pdev, NULL);
 
-	pm_runtime_disable(&pdev->dev);
+ 	pm_runtime_disable(&pdev->dev);
 
 	if (priv)
 		kfree(priv);
 
+	return 0;
+}
+
+/* Configure the Burst Size and fifo threhold of DMA */
+static int lcd_cfg_dma(struct llid_par *item, int burst_size,  int fifo_th)
+{
+	u32 reg;
+
+	reg = (reg_read(item, LCDC_DMA_CTRL_REG) & 0x00000005);	// | LCD_DUAL_FRAME_BUFFER_ENABLE; not for LIDD DMA??
+	switch (burst_size) {
+	case 1:
+		reg |= LCDC_DMA_BURST_SIZE(LCDC_DMA_BURST_1);
+		break;
+	case 2:
+		reg |= LCDC_DMA_BURST_SIZE(LCDC_DMA_BURST_2);
+		break;
+	case 4:
+		reg |= LCDC_DMA_BURST_SIZE(LCDC_DMA_BURST_4);
+		break;
+	case 8:
+		reg |= LCDC_DMA_BURST_SIZE(LCDC_DMA_BURST_8);
+		break;
+	case 16:
+		reg |= LCDC_DMA_BURST_SIZE(LCDC_DMA_BURST_16);
+		break;
+	default:
+		return -EINVAL;
+	}
+
+	reg |= (fifo_th << 8);
+	reg |= BIT(2);					// EOF_INTEN
+
+	reg_write(item, LCDC_DMA_CTRL_REG, reg);
+
+	return 0;
+}
+
+/* IRQ handler for version 2 of LCDC */
+static irqreturn_t ssd1289_irq_handler(int irq, void *arg)
+{
+	struct llid_par *item = (struct llid_par *)arg;
+	u32 stat = reg_read(item,LCDC_MASKED_STAT_REG);
+	u32 reg_int;
+
+	if ((stat & LCDC_SYNC_LOST) || (stat & LCDC_FIFO_UNDERFLOW)) {
+		printk(KERN_ERR "LCDC sync lost or underflow error occured\nNot sure what to do...\n");
+		reg_write(item, LCDC_MASKED_STAT_REG, stat);
+	} else {
+		lidd_dma_setstatus(item, 0);	//disable DMA
+
+		reg_write(item, LCDC_MASKED_STAT_REG, stat);
+
+		ssd1289_reg_set(item, SSD1289_REG_GDDRAM_X_ADDR, 0);
+		ssd1289_reg_set(item, SSD1289_REG_GDDRAM_Y_ADDR, 0);
+		reg_write(item, LCD_LIDD_CS0_ADDR, SSD1289_REG_GDDRAM_DATA);	//set up for data before DMA begins
+
+		if (!item->suspending) {				//Don't re-enable DMA if we want to suspend or disable the driver
+			lidd_dma_setstatus(item, 1);	//enable DMA
+		} else {
+			item->suspending = 0;
+		}
+	}
+	//lcdc_write(item, 0, LCD_END_OF_INT_IND_REG);		//not a thing...?
+	return IRQ_HANDLED;
+}
+
+static void lidd_dma_setstatus(struct llid_par *item, int doenable) {
+	//enable DMA
+	unsigned int cfg;
+
+	cfg = reg_read(item,LCD_LIDD_CTRL);
+	cfg = (cfg & ~BIT(8)) | ((doenable&1) << 8);	//enable or disable DMA
+	reg_write(item, LCD_LIDD_CTRL, cfg);
+}
+
+static void ssd1289_dma_setstatus(struct llid_par *item, int doenable) {
+	//enable DMA
+	unsigned int cfg;
+
+	cfg = reg_read(item,LCD_LIDD_CTRL);
+	cfg = (cfg & ~BIT(8)) | ((doenable&1) << 8);	//enable or disable DMA
+	reg_write(item,LCD_LIDD_CTRL, cfg);
+}
+
+static int ssd1289_suspend (struct platform_device *dev, pm_message_t state) {
+	return 0;
+}
+
+static int ssd1289_resume (struct platform_device *dev) {
 	return 0;
 }
 
@@ -455,6 +588,8 @@ MODULE_DEVICE_TABLE(of, tillid_of_match);
 static struct platform_driver tillid_platform_driver =
 { .probe = tillid_pdev_probe,
   .remove = tillid_pdev_remove,
+  .resume = ssd1289_resume,
+  .suspend = ssd1289_suspend,
   .driver = {
 		  .name = DRIVER_NAME,
 		  .pm     = &tilidd_pm_ops,

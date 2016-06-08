@@ -55,6 +55,9 @@
 #define LCDC_V2_LPP_B10                          26
 #define LCDC_V2_TFT_24BPP_MODE                   BIT(25)
 #define LCDC_V2_TFT_24BPP_UNPACK                 BIT(26)
+#define LCD_V2_END_OF_FRAME0_INT_ENA	BIT(8)
+#define LCD_V2_END_OF_FRAME1_INT_ENA	BIT(9)
+#define LCD_V2_DONE_INT_ENA					BIT(0)
 
 /* LCDC Raster Timing 2 Register */
 #define LCDC_AC_BIAS_TRANSITIONS_PER_INT(x)      ((x) << 16)
