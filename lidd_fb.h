@@ -44,65 +44,6 @@ struct lidd_framebuffer_ops {
 	int (*set_gamma)(struct lidd_par *par, unsigned long *curves);
 };
 
-/**
- * struct lidd_display - Describes the display properties
- * @width: Width of display in pixels
- * @height: Height of display in pixels
- * @regwidth: LCD Controller Register width in bits
- * @buswidth: Display interface bus width in bits
- * @backlight: Backlight type.
- * @ops: llid operations provided by driver or device (platform_data)
- * @bpp: Bits per pixel
- * @fps: Frames per second
- * @txbuflen: Size of transmit buffer
- * @init_sequence: Pointer to LCD initialization array
- * @gamma: String representation of Gamma curve(s)
- * @gamma_num: Number of Gamma curves
- * @gamma_len: Number of values per Gamma curve
- * @debug: Initial debug value
- *
- * This structure is not stored by lidd except for init_sequence.
- */
-struct lidd_display {
-	unsigned width;
-	unsigned height;
-	unsigned regwidth;
-	unsigned buswidth;
-	unsigned backlight;
-	struct lidd_framebuffer_ops ops;
-	unsigned bpp;
-	unsigned fps;
-	int txbuflen;
-	int *init_sequence;
-	char *gamma;
-	int gamma_num;
-	int gamma_len;
-	unsigned long debug;
-};
-
-/**
- * struct fbtft_platform_data - Passes display specific data to the driver
- * @display: Display properties
- * @gpios: Pointer to an array of pinname to gpio mappings
- * @rotate: Display rotation angle
- * @bgr: LCD Controller BGR bit
- * @fps: Frames per second (this will go away, use @fps in @fbtft_display)
- * @txbuflen: Size of transmit buffer
- * @startbyte: When set, enables use of Startbyte in transfers
- * @gamma: String representation of Gamma curve(s)
- * @extra: A way to pass extra info
- */
-struct lidd_platform_data {
-	struct lidd_display display;
-	unsigned rotate;
-	bool bgr;
-	unsigned fps;
-	int txbuflen;
-	u8 startbyte;
-	char *gamma;
-	void *extra;
-};
-
 /* @pdev: Set if it is a platform device
  * @info: Pointer to framebuffer fb_info structure
  * @pdata: Pointer to platform data

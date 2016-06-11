@@ -61,8 +61,6 @@ static int ssd1289_setcolreg(unsigned regno, unsigned red, unsigned green,
                              unsigned blue, unsigned transp, struct fb_info *info);
 static int fb_ioctl(struct fb_info *info, unsigned int cmd, unsigned long arg);
 
-static struct lidd_par *display_params = NULL;
-
 static struct fb_ops ssd1289_fbops = {
 	.owner        = THIS_MODULE,
 	.fb_setcolreg = ssd1289_setcolreg,
@@ -184,11 +182,11 @@ static int tillid_pdev_probe(struct platform_device *pdev) {
 
 	pr_debug("pm_runtime enabled\n");
 
-	pm_set_vt_switch(0);
+//	pm_set_vt_switch(0);
 
-	pr_debug("pm_set_vt_switched\n");
+//	pr_debug("pm_set_vt_switched\n");
 	//pm_runtime_irq_safe(&pdev->dev);
-	pr_debug("pm_runtime_irq_safed\n");
+//	pr_debug("pm_runtime_irq_safed\n");
 	pm_runtime_get_sync(&pdev->dev);
 	pr_debug("pm_get sync\n");
 
@@ -207,7 +205,6 @@ static int tillid_pdev_probe(struct platform_device *pdev) {
 		goto out_clk_enable;
 	}
 	pr_debug("clk rate configured\n");
-	display_params = priv;
 
 	//AM335X LCD Controller Check
 	signature = reg_read(priv,LCDC_PID_REG);
@@ -237,7 +234,7 @@ static int tillid_pdev_probe(struct platform_device *pdev) {
 
 	ssd1289_setup(priv);
 
-	//For test lcd is filled red color
+	//For tests lcd is filled red color
 	LCD_Clear(priv, Red);
 	pr_debug("LCD cleared to red\n");
 
@@ -271,8 +268,6 @@ static int tillid_pdev_probe(struct platform_device *pdev) {
 	info->fix = ssd1289_fix;
 	info->var = ssd1289_var;
 	fb_set_var(info,&ssd1289_var);
-	dev_set_drvdata(&pdev->dev, info);
-	pr_debug("Set drv data\n");
 
 	ret = lidd_video_alloc(priv);
 	if (ret) {
@@ -321,6 +316,9 @@ static int tillid_pdev_probe(struct platform_device *pdev) {
 
 	lidd_dma_setstatus(priv, 1);	//enable DMA
 
+	dev_set_drvdata(&pdev->dev, priv);
+	pr_debug("Set drv data\n");
+
 	return 0;
 
 out_framebuffer:
@@ -347,7 +345,7 @@ out:
 
 static int tillid_pdev_remove(struct platform_device *pdev) {
 
-	struct lidd_par *priv = display_params;
+	struct lidd_par *priv = dev_get_drvdata(&pdev->dev);
 	struct resource *res;
 
 	if (priv->info) {
