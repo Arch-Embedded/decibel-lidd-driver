@@ -22,7 +22,7 @@
 
 struct lidd_par;
 
-struct llid_framebuffer_ops {
+struct lidd_framebuffer_ops {
 	int (*write)(struct lidd_par *par, void *buf, size_t len);
 	int (*read)(struct lidd_par *par, void *buf, size_t len);
 	int (*write_vmem)(struct lidd_par *par, size_t offset, size_t len);
@@ -45,7 +45,7 @@ struct llid_framebuffer_ops {
 };
 
 /**
- * struct llid_display - Describes the display properties
+ * struct lidd_display - Describes the display properties
  * @width: Width of display in pixels
  * @height: Height of display in pixels
  * @regwidth: LCD Controller Register width in bits
@@ -61,15 +61,15 @@ struct llid_framebuffer_ops {
  * @gamma_len: Number of values per Gamma curve
  * @debug: Initial debug value
  *
- * This structure is not stored by llid except for init_sequence.
+ * This structure is not stored by lidd except for init_sequence.
  */
-struct llid_display {
+struct lidd_display {
 	unsigned width;
 	unsigned height;
 	unsigned regwidth;
 	unsigned buswidth;
 	unsigned backlight;
-	struct llid_framebuffer_ops ops;
+	struct lidd_framebuffer_ops ops;
 	unsigned bpp;
 	unsigned fps;
 	int txbuflen;
@@ -92,8 +92,8 @@ struct llid_display {
  * @gamma: String representation of Gamma curve(s)
  * @extra: A way to pass extra info
  */
-struct llid_platform_data {
-	struct llid_display display;
+struct lidd_platform_data {
+	struct lidd_display display;
 	unsigned rotate;
 	bool bgr;
 	unsigned fps;
@@ -102,8 +102,6 @@ struct llid_platform_data {
 	char *gamma;
 	void *extra;
 };
-
-
 
 /* @pdev: Set if it is a platform device
  * @info: Pointer to framebuffer fb_info structure
@@ -114,7 +112,7 @@ struct llid_platform_data {
  * @buf: Small buffer used when writing init data over SPI
  * @startbyte: Used by some controllers when in SPI mode.
  *             Format: 6 bit Device id + RS bit + RW bit
- * @llidops: llid operations provided by driver or device (platform_data)
+ * @liddops: lidd operations provided by driver or device (platform_data)
  * @dirty_lock: Protects dirty_lines_start and dirty_lines_end
  * @dirty_lines_start: Where to begin updating display
  * @dirty_lines_end: Where to end updating display
@@ -133,7 +131,7 @@ struct llid_platform_data {
 struct lidd_par {
 	struct platform_device *pdev;
 	struct fb_info *info;
-	struct llid_platform_data *pdata;
+	struct lidd_platform_data *pdata;
 	struct resource *reg_res;
 	unsigned int irqNumber;
 	u32 pseudo_palette[16];
@@ -144,7 +142,7 @@ struct lidd_par {
 	} txbuf;
 	u8 *buf;
 	u8 startbyte;
-	struct llid_framebuffer_ops ops;
+	struct lidd_framebuffer_ops ops;
 	spinlock_t dirty_lock;
 	unsigned dirty_lines_start;
 	unsigned dirty_lines_end;

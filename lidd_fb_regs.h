@@ -1,12 +1,12 @@
 /*
- * llid_fb_regs.h
+ * lidd_fb_regs.h
  *
  *  Created on: May 13, 2016
- *      Author: gapa
+ *      Author: Cezary Gapinski <cezary.gapinski@gmail.com>
  */
 
-#ifndef LLID_FB_REGS_H_
-#define LLID_FB_REGS_H_
+#ifndef LIDD_FB_REGS_H_
+#define LIDD_FB_REGS_H_
 
 /* LCDC Status Register */
 #define LCDC_END_OF_FRAME1                       BIT(9)

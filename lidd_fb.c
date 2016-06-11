@@ -513,9 +513,9 @@ static const struct dev_pm_ops tilidd_pm_ops = {
 	SET_SYSTEM_SLEEP_PM_OPS(tilidd_suspend, tilidd_resume)
 };
 
-static struct of_device_id tillid_of_match[] = { { .compatible =
-		"ti,am33xx-llid,llid-lcd", }, { }, };
-MODULE_DEVICE_TABLE(of, tillid_of_match);
+static struct of_device_id cglidd_of_match[] = { { .compatible =
+		"cg,am33xx-lidd", }, { }, };
+MODULE_DEVICE_TABLE(of, cglidd_of_match);
 
 static struct platform_driver tillid_platform_driver =
 { .probe = tillid_pdev_probe,
@@ -525,7 +525,7 @@ static struct platform_driver tillid_platform_driver =
   .driver = {
 		  .name = DRIVER_NAME,
 		  .pm     = &tilidd_pm_ops,
-		  .of_match_table = tillid_of_match, },
+		  .of_match_table = cglidd_of_match, },
 };
 
 static int __init tillid_fb_init(void) {
