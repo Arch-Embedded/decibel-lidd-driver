@@ -154,58 +154,58 @@
  * Helpers:
  */
 
-static inline void reg_write(struct llid_par *par, u32 reg, u32 data)
+static inline void reg_write(struct lidd_par *par, u32 reg, u32 data)
 {
 	iowrite32(data, par->mmio + reg);
 }
 
-static inline u32 reg_read(struct llid_par *par, u32 reg)
+static inline u32 reg_read(struct lidd_par *par, u32 reg)
 {
 	return ioread32(par->mmio + reg);
 }
 
-static inline void reg_set(struct llid_par *par, u32 reg, u32 mask)
+static inline void reg_set(struct lidd_par *par, u32 reg, u32 mask)
 {
 	reg_write(par, reg, reg_read(par, reg) | mask);
 }
 
-static inline void reg_clear(struct llid_par *par, u32 reg, u32 mask)
+static inline void reg_clear(struct lidd_par *par, u32 reg, u32 mask)
 {
 	reg_write(par, reg, reg_read(par, reg) & ~mask);
 }
 
 /* the register to read/clear irqstatus differs between v1 and v2 of the IP */
-static inline u32 llid_irqstatus_reg(struct llid_par *par)
+static inline u32 llid_irqstatus_reg(struct lidd_par *par)
 {
 	return (par->rev == 2) ? LCDC_MASKED_STAT_REG : LCDC_STAT_REG;
 }
 
-static inline u32 llid_read_irqstatus(struct llid_par *par)
+static inline u32 llid_read_irqstatus(struct lidd_par *par)
 {
 	return reg_read(par, llid_irqstatus_reg(par));
 }
 
-static inline void llid_clear_irqstatus(struct llid_par *par, u32 mask)
+static inline void llid_clear_irqstatus(struct lidd_par *par, u32 mask)
 {
 	reg_write(par, llid_irqstatus_reg(par), mask);
 }
 
-static inline void ssd1289_reg_set(struct llid_par *item, unsigned char reg,
+static inline void ssd1289_reg_set(struct lidd_par *item, unsigned char reg,
 				   unsigned short value)
 {
 	reg_write(item, LCD_LIDD_CS0_ADDR, 0x000000FF&(unsigned int)reg);
 	reg_write(item, LCD_LIDD_CS0_DATA, (unsigned int)value);
 }
 
-static inline unsigned int ssd1289_reg_get(struct llid_par *item, unsigned char reg)
+static inline unsigned int ssd1289_reg_get(struct lidd_par *item, unsigned char reg)
 {
 	reg_write(item, LCD_LIDD_CS0_ADDR, 0x000000FF&(unsigned int)reg);
 	return reg_read(item,LCD_LIDD_CS0_DATA);
 }
 
-static inline void LCD_WriteRAM_Prepare(struct llid_par *item)
+static inline void LCD_WriteRAM_Prepare(struct lidd_par *item)
 {
 	reg_write(item, LCD_LIDD_CS0_ADDR, (unsigned int)SSD1289_REG_GDDRAM_DATA);
 }
 
-#endif /* LLID_FB_REGS_H_ */
+#endif /* LIDD_FB_REGS_H_ */

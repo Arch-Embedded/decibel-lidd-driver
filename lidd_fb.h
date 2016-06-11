@@ -1,12 +1,12 @@
 /*
- * llid_fb.h
+ * ldid_fb.h
  *
  *  Created on: May 8, 2016
- *      Author: gapa
+ *      Author: Cezary Gapinski <cezary.gapinski@gmail.com>
  */
 
-#ifndef LLID_FB_H_
-#define LLID_FB_H_
+#ifndef LIDD_FB_H_
+#define LIDD_FB_H_
 
 /* LCD color */
 #define White          0xFFFF
@@ -20,28 +20,28 @@
 #define Cyan           0x7FFF
 #define Yellow         0xFFE0
 
-struct llid_par;
+struct lidd_par;
 
 struct llid_framebuffer_ops {
-	int (*write)(struct llid_par *par, void *buf, size_t len);
-	int (*read)(struct llid_par *par, void *buf, size_t len);
-	int (*write_vmem)(struct llid_par *par, size_t offset, size_t len);
-	void (*write_register)(struct llid_par *par, int len, ...);
+	int (*write)(struct lidd_par *par, void *buf, size_t len);
+	int (*read)(struct lidd_par *par, void *buf, size_t len);
+	int (*write_vmem)(struct lidd_par *par, size_t offset, size_t len);
+	void (*write_register)(struct lidd_par *par, int len, ...);
 
-	void (*set_addr_win)(struct llid_par *par,
+	void (*set_addr_win)(struct lidd_par *par,
 		int xs, int ys, int xe, int ye);
-	void (*reset)(struct llid_par *par);
+	void (*reset)(struct lidd_par *par);
 	void (*mkdirty)(struct fb_info *info, int from, int to);
-	void (*update_display)(struct llid_par *par,
+	void (*update_display)(struct lidd_par *par,
 				unsigned start_line, unsigned end_line);
-	int (*init_display)(struct llid_par *par);
-	int (*blank)(struct llid_par *par, bool on);
+	int (*init_display)(struct lidd_par *par);
+	int (*blank)(struct lidd_par *par, bool on);
 
-	void (*register_backlight)(struct llid_par *par);
-	void (*unregister_backlight)(struct llid_par *par);
+	void (*register_backlight)(struct lidd_par *par);
+	void (*unregister_backlight)(struct lidd_par *par);
 
-	int (*set_var)(struct llid_par *par);
-	int (*set_gamma)(struct llid_par *par, unsigned long *curves);
+	int (*set_var)(struct lidd_par *par);
+	int (*set_gamma)(struct lidd_par *par, unsigned long *curves);
 };
 
 /**
@@ -130,7 +130,7 @@ struct llid_platform_data {
  * @bgr: BGR mode/\n
  * @extra: Extra info needed by driver
  */
-struct llid_par {
+struct lidd_par {
 	struct platform_device *pdev;
 	struct fb_info *info;
 	struct llid_platform_data *pdata;
@@ -179,4 +179,4 @@ struct llid_par {
 	int 				suspending;	//whether a suspend is in progress
 };
 
-#endif /* LLID_FB_H_ */
+#endif /* LIDD_FB_H_ */
