@@ -71,7 +71,7 @@ static struct fb_ops ssd1289_fbops = {
 //	.fb_blank = sys_blank,
 };
 
-static struct fb_fix_screeninfo ssd1289_fix __initdata = {
+static struct fb_fix_screeninfo ssd1289_fix = {
 	.id          = DRIVER_NAME,
 	.type        = FB_TYPE_PACKED_PIXELS,
 	.visual      = FB_VISUAL_TRUECOLOR,
@@ -79,7 +79,7 @@ static struct fb_fix_screeninfo ssd1289_fix __initdata = {
 	.line_length = 240 * 2,
 };
 
-static struct fb_var_screeninfo ssd1289_var __initdata = {
+static struct fb_var_screeninfo ssd1289_var = {
 	.xres		= 240,
 	.yres		= 320,
 	.xres_virtual	= 240,
@@ -99,13 +99,13 @@ static int tilidd_resume (struct device *dev);
 static void lcd_context_save(struct lidd_par* item);
 static void lcd_context_restore(struct lidd_par* item);
 
-static int __init lidd_video_alloc(struct lidd_par *item);
+static int lidd_video_alloc(struct lidd_par *item);
 static int lcd_cfg_dma(struct lidd_par *item, int burst_size,  int fifo_th);
 
 static void lidd_dma_setstatus(struct lidd_par *item, int doenable);
 static irqreturn_t ssd1289_irq_handler(int irq, void *arg);
 
-static void __init ssd1289_setup(struct lidd_par *item);
+static void ssd1289_setup(struct lidd_par *item);
 
 static void LCD_Clear(struct lidd_par *item, uint16_t Color);
 static void LCD_SetCursor(struct lidd_par *item, uint16_t Xpos,uint16_t Ypos);
@@ -117,6 +117,11 @@ static int tillid_pdev_probe(struct platform_device *pdev) {
 	int ret = 0;
 	unsigned int signature;
 	struct fb_info *info;
+	struct gpio_desc *enable_gpio;
+	enable_gpio = devm_gpiod_get_optional(&pdev->dev, "enable", GPIOD_OUT_HIGH);
+	if (IS_ERR(enable_gpio)) {
+		dev_err(&pdev->dev, "failed to request enable GPIO\n");
+	}
 
 	/* bail out early if no DT data: */
 	if (!node) {
@@ -159,7 +164,7 @@ static int tillid_pdev_probe(struct platform_device *pdev) {
 
 	pr_debug("Platform get resource finished\n");
 
-	priv->mmio = ioremap_nocache(priv->reg_res->start, resource_size(priv->reg_res));
+	priv->mmio = ioremap(priv->reg_res->start, resource_size(priv->reg_res));
 	if (!priv->mmio) {
 		dev_err(&pdev->dev, "failed to ioremap\n");
 		ret = -EINVAL;
@@ -227,10 +232,11 @@ static int tillid_pdev_probe(struct platform_device *pdev) {
 			 | 2 << W_HOLD_POS | 2 << W_STROBE_POS | 1 << W_SU_POS));
 	pr_debug("Initialized LCDC controller");
 
+
 	//SSD1289 LCD Driver Check
 	ssd1289_reg_set(priv, SSD1289_REG_OSCILLATION, 0x0001);
 	signature = ssd1289_reg_get(priv,SSD1289_REG_DEV_CODE_READ);
-	dev_dbg(&pdev->dev, "SSD1289 Reg value 0x%08x ", signature);
+	pr_debug("SSD1289 Reg value 0x%08x ", signature);
 
 	ssd1289_setup(priv);
 
@@ -375,33 +381,21 @@ static int tillid_pdev_remove(struct platform_device *pdev) {
 	return 0;
 }
 
-static int __init lidd_video_alloc(struct lidd_par *item)
+static int lidd_video_alloc(struct lidd_par *item)
 {
 	unsigned int frame_size;
-	int pages_count;
 	struct platform_device *pdev = item->pdev;
 	pr_debug("lidd_video_alloc start\n");
 
 	// Calculate raw framebuffer size
 	frame_size = item->info->fix.line_length * item->info->var.yres;
-	dev_dbg(&pdev->dev, "%s: frame_size=%u\n",
-		__func__, frame_size);
+	dev_dbg(&pdev->dev, "%s: frame_size=%u\n", __func__, frame_size);
 
 	pr_debug("After calculation frame_size\n");
 
-	// Figure out how many full pages we need
-	pages_count = frame_size / PAGE_SIZE;
-	if ((pages_count * PAGE_SIZE) < frame_size) {
-		pages_count++;
-	}
-	dev_dbg(&pdev->dev, "%s: pages_count=%u per each of %d buffer(s)\n",
-		__func__, pages_count, LCD_NUM_BUFFERS);
-
-	pr_debug("After pages count\n");
-
 	// Reserve DMA-able RAM, set up fix.
-	item->vram_size = pages_count * PAGE_SIZE * LCD_NUM_BUFFERS;
-	item->vram_virt = dma_alloc_coherent(NULL,
+	item->vram_size = frame_size * LCD_NUM_BUFFERS;
+	item->vram_virt = dma_alloc_coherent(&pdev->dev,
 							item->vram_size,
 							(resource_size_t *) &item->vram_phys,
 							GFP_KERNEL | GFP_DMA);
@@ -421,7 +415,7 @@ static int __init lidd_video_alloc(struct lidd_par *item)
 
 	item->dma_start = item->vram_phys;
 	item->dma_end   = item->dma_start + (item->info->var.yres * item->info->fix.line_length) - 1;
-	dev_dbg(&pdev->dev, "%s: DMA set from 0x%d to 0x%d, %ld bytes\n",__func__,
+	dev_dbg(&pdev->dev, "%s: DMA set from 0x%x to 0x%x, %ld bytes\n",__func__,
 			item->dma_start,item->dma_end,item->vram_size);
 
 	return 0;
@@ -624,7 +618,7 @@ static void lcd_context_restore(struct lidd_par* item)
 	return;
 }
 
-static void __init ssd1289_setup(struct lidd_par *item)
+static void ssd1289_setup(struct lidd_par *item)
 {
 	// OSCEN=1
 	ssd1289_reg_set(item, SSD1289_REG_OSCILLATION, 0x0001);

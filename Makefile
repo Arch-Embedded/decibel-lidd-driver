@@ -1,9 +1,16 @@
-obj-m+=lidd_fb.o
-CFLAGS_lidd_fb.o := -DDEBUG
-KDIR ?= /usr/embedded_build/linux
-CROSS_COMPILE = /usr/embedded_build/buildroot-2016.02/output/host/opt/ext-toolchain/bin/arm-linux-gnueabihf-
-all:
-	make -C $(KDIR) ARCH=arm CROSS_COMPILE=$(CROSS_COMPILE) SUBDIRS=$(PWD) modules 
+.PHONY:all clean modules_install
+obj-m := lidd_fb.o
+
+ARCH=arm
+CROSS_COMPILE=arm-linux-gnueabihf-
+KERNELDIR := ../linux
+PWD := $(shell pwd)
+WARN :=-Wall -Wstrict-prototypes -Wno-trigraphs -Wmissing-prototypes
+ccflags-y += "-Wno-error=date-time"
+all: modules
+
+modules modules_install:
+	$(MAKE) -C $(KERNELDIR) M=$(PWD) ARCH=$(ARCH) CROSS_COMPILE=$(CROSS_COMPILE) $(WARN) $@
+
 clean:
-	make -C $(KDIR) M=$(PWD) clean
-	
+	$(MAKE) -C $(KERNELDIR) M=$(PWD) clean
