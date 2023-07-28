@@ -22,26 +22,25 @@
 
 struct lidd_par;
 
-struct lidd_framebuffer_ops {
-	int (*write)(struct lidd_par *par, void *buf, size_t len);
-	int (*read)(struct lidd_par *par, void *buf, size_t len);
-	int (*write_vmem)(struct lidd_par *par, size_t offset, size_t len);
-	void (*write_register)(struct lidd_par *par, int len, ...);
+struct lidd_framebuffer_ops
+{
+    int  (* write)(struct lidd_par* par, void* buf, size_t len);
+    int  (* read)(struct lidd_par* par, void* buf, size_t len);
+    int  (* write_vmem)(struct lidd_par* par, size_t offset, size_t len);
+    void (* write_register)(struct lidd_par* par, int len, ...);
 
-	void (*set_addr_win)(struct lidd_par *par,
-		int xs, int ys, int xe, int ye);
-	void (*reset)(struct lidd_par *par);
-	void (*mkdirty)(struct fb_info *info, int from, int to);
-	void (*update_display)(struct lidd_par *par,
-				unsigned start_line, unsigned end_line);
-	int (*init_display)(struct lidd_par *par);
-	int (*blank)(struct lidd_par *par, bool on);
+    void (* set_addr_win)(struct lidd_par* par, int xs, int ys, int xe, int ye);
+    void (* reset)(struct lidd_par* par);
+    void (* mkdirty)(struct fb_info* info, int from, int to);
+    void (* update_display)(struct lidd_par* par, unsigned start_line, unsigned end_line);
+    int  (* init_display)(struct lidd_par* par);
+    int  (* blank)(struct lidd_par* par, bool on);
 
-	void (*register_backlight)(struct lidd_par *par);
-	void (*unregister_backlight)(struct lidd_par *par);
+    void (* register_backlight)(struct lidd_par* par);
+    void (* unregister_backlight)(struct lidd_par* par);
 
-	int (*set_var)(struct lidd_par *par);
-	int (*set_gamma)(struct lidd_par *par, unsigned long *curves);
+    int  (* set_var)(struct lidd_par* par);
+    int  (* set_gamma)(struct lidd_par* par, unsigned long* curves);
 };
 
 /* @pdev: Set if it is a platform device
@@ -69,53 +68,56 @@ struct lidd_framebuffer_ops {
  * @bgr: BGR mode/\n
  * @extra: Extra info needed by driver
  */
-struct lidd_par {
-	struct platform_device *pdev;
-	struct fb_info *info;
-	struct lidd_platform_data *pdata;
-	struct resource *reg_res;
-	unsigned int irqNumber;
-	u32 pseudo_palette[16];
-	struct {
-		void *buf;
-		dma_addr_t dma;
-		size_t len;
-	} txbuf;
-	u8 *buf;
-	u8 startbyte;
-	struct lidd_framebuffer_ops ops;
-	spinlock_t dirty_lock;
-	unsigned dirty_lines_start;
-	unsigned dirty_lines_end;
-	int *init_sequence;
-	struct {
-		struct mutex lock;
-		unsigned long *curves;
-		int num_values;
-		int num_curves;
-	} gamma;
-	unsigned long debug;
-	bool first_update_done;
-	ktime_t update_time;
-	bool bgr;
-	void *extra;
-	int rev;                 /* IP revision */
-	void __iomem *mmio;
-	struct display_timings *timings;
-	struct clk *lcdc_clk;			//Power enable for the LCDC
+struct lidd_par
+{
+    struct platform_device*    pdev;
+    struct fb_info* info;
+    struct lidd_platform_data* pdata;
+    struct resource* reg_res;
+    unsigned int     irqNumber;
+    u32 pseudo_palette[16];
+    struct
+    {
+        void*      buf;
+        dma_addr_t dma;
+        size_t     len;
+    } txbuf;
+    u8* buf;
+    u8  startbyte;
+    struct lidd_framebuffer_ops ops;
+    spinlock_t dirty_lock;
+    unsigned   dirty_lines_start;
+    unsigned   dirty_lines_end;
+    int* init_sequence;
+    struct
+    {
+        struct mutex   lock;
+        unsigned long* curves;
+        int num_values;
+        int num_curves;
+    } gamma;
+    unsigned long debug;
+    bool          first_update_done;
+    ktime_t       update_time;
+    bool          bgr;
+    void*         extra;
+    int           rev;       /* IP revision */
+    void __iomem* mmio;
+    struct display_timings* timings;
+    struct clk*   lcdc_clk;         //Power enable for the LCDC
 #ifdef CONFIG_CPU_FREQ
-	struct notifier_block freq_transition;
-	unsigned int lcd_fck_rate;
+    struct notifier_block freq_transition;
+    unsigned int  lcd_fck_rate;
 #endif
-	//DMA/Memory things
-	int 				irq;		//irq resource number
-	dma_addr_t			vram_phys;	//should be same as dma_start
-	unsigned long		vram_size;
-	void				*vram_virt;
-	unsigned int		dma_start;	//physical addresses
-	unsigned int		dma_end;
-	int 				blank;		//?
-	int 				suspending;	//whether a suspend is in progress
+    //DMA/Memory things
+    int           irq;              //irq resource number
+    dma_addr_t    vram_phys;        //should be same as dma_start
+    unsigned long vram_size;
+    void*         vram_virt;
+    unsigned int  dma_start;        //physical addresses
+    unsigned int  dma_end;
+    int           blank;            //?
+    int           suspending;       //whether a suspend is in progress
 };
 
 #endif /* LIDD_FB_H_ */

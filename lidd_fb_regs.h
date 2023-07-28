@@ -55,9 +55,9 @@
 #define LCDC_V2_LPP_B10                          26
 #define LCDC_V2_TFT_24BPP_MODE                   BIT(25)
 #define LCDC_V2_TFT_24BPP_UNPACK                 BIT(26)
-#define LCD_V2_END_OF_FRAME0_INT_ENA	BIT(8)
-#define LCD_V2_END_OF_FRAME1_INT_ENA	BIT(9)
-#define LCD_V2_DONE_INT_ENA					BIT(0)
+#define LCD_V2_END_OF_FRAME0_INT_ENA    BIT(8)
+#define LCD_V2_END_OF_FRAME1_INT_ENA    BIT(9)
+#define LCD_V2_DONE_INT_ENA                 BIT(0)
 
 /* LCDC Raster Timing 2 Register */
 #define LCDC_AC_BIAS_TRANSITIONS_PER_INT(x)      ((x) << 16)
@@ -82,10 +82,10 @@
 #define LCDC_PID_REG                             0x0
 #define LCDC_CTRL_REG                            0x4
 #define LCDC_STAT_REG                            0x8
-#define LCD_LIDD_CTRL							 0x0C
-#define LCD_CS0_CONF							 0x10
-#define LCD_LIDD_CS0_ADDR						 0x14
-#define LCD_LIDD_CS0_DATA						 0x18
+#define LCD_LIDD_CTRL                            0x0C
+#define LCD_CS0_CONF                             0x10
+#define LCD_LIDD_CS0_ADDR                        0x14
+#define LCD_LIDD_CS0_DATA                        0x18
 #define LCDC_RASTER_CTRL_REG                     0x28
 #define LCDC_RASTER_TIMING_0_REG                 0x2c
 #define LCDC_RASTER_TIMING_1_REG                 0x30
@@ -108,7 +108,7 @@
 #define LCDC_CLK_RESET_REG                       0x70
 #define LCDC_CLK_MAIN_RESET                      BIT(3)
 
-#define LCD_LIDD_TYPE_8080						BIT(0) | BIT(1)
+#define LCD_LIDD_TYPE_8080                      BIT(0) | BIT(1)
 
 #define SSD1289_REG_OSCILLATION      0x00
 #define SSD1289_REG_DEV_CODE_READ    0x00
@@ -154,58 +154,58 @@
  * Helpers:
  */
 
-static inline void reg_write(struct lidd_par *par, u32 reg, u32 data)
+static inline void reg_write(struct lidd_par* par, u32 reg, u32 data)
 {
-	iowrite32(data, par->mmio + reg);
+    iowrite32(data, par->mmio + reg);
 }
 
-static inline u32 reg_read(struct lidd_par *par, u32 reg)
+static inline u32 reg_read(struct lidd_par* par, u32 reg)
 {
-	return ioread32(par->mmio + reg);
+    return ioread32(par->mmio + reg);
 }
 
-static inline void reg_set(struct lidd_par *par, u32 reg, u32 mask)
+static inline void reg_set(struct lidd_par* par, u32 reg, u32 mask)
 {
-	reg_write(par, reg, reg_read(par, reg) | mask);
+    reg_write(par, reg, reg_read(par, reg) | mask);
 }
 
-static inline void reg_clear(struct lidd_par *par, u32 reg, u32 mask)
+static inline void reg_clear(struct lidd_par* par, u32 reg, u32 mask)
 {
-	reg_write(par, reg, reg_read(par, reg) & ~mask);
+    reg_write(par, reg, reg_read(par, reg) & ~mask);
 }
 
 /* the register to read/clear irqstatus differs between v1 and v2 of the IP */
-static inline u32 llid_irqstatus_reg(struct lidd_par *par)
+static inline u32 llid_irqstatus_reg(struct lidd_par* par)
 {
-	return (par->rev == 2) ? LCDC_MASKED_STAT_REG : LCDC_STAT_REG;
+    return (par->rev == 2) ? LCDC_MASKED_STAT_REG : LCDC_STAT_REG;
 }
 
-static inline u32 llid_read_irqstatus(struct lidd_par *par)
+static inline u32 llid_read_irqstatus(struct lidd_par* par)
 {
-	return reg_read(par, llid_irqstatus_reg(par));
+    return reg_read(par, llid_irqstatus_reg(par));
 }
 
-static inline void llid_clear_irqstatus(struct lidd_par *par, u32 mask)
+static inline void llid_clear_irqstatus(struct lidd_par* par, u32 mask)
 {
-	reg_write(par, llid_irqstatus_reg(par), mask);
+    reg_write(par, llid_irqstatus_reg(par), mask);
 }
 
-static inline void ssd1289_reg_set(struct lidd_par *item, unsigned char reg,
-				   unsigned short value)
+static inline void ssd1289_reg_set(struct lidd_par* item, unsigned char reg,
+                                   unsigned short value)
 {
-	reg_write(item, LCD_LIDD_CS0_ADDR, 0x000000FF&(unsigned int)reg);
-	reg_write(item, LCD_LIDD_CS0_DATA, (unsigned int)value);
+    reg_write(item, LCD_LIDD_CS0_ADDR, 0x000000FF & (unsigned int)reg);
+    reg_write(item, LCD_LIDD_CS0_DATA, (unsigned int)value);
 }
 
-static inline unsigned int ssd1289_reg_get(struct lidd_par *item, unsigned char reg)
+static inline unsigned int ssd1289_reg_get(struct lidd_par* item, unsigned char reg)
 {
-	reg_write(item, LCD_LIDD_CS0_ADDR, 0x000000FF&(unsigned int)reg);
-	return reg_read(item,LCD_LIDD_CS0_DATA);
+    reg_write(item, LCD_LIDD_CS0_ADDR, 0x000000FF & (unsigned int)reg);
+    return reg_read(item, LCD_LIDD_CS0_DATA);
 }
 
-static inline void LCD_WriteRAM_Prepare(struct lidd_par *item)
+static inline void LCD_WriteRAM_Prepare(struct lidd_par* item)
 {
-	reg_write(item, LCD_LIDD_CS0_ADDR, (unsigned int)SSD1289_REG_GDDRAM_DATA);
+    reg_write(item, LCD_LIDD_CS0_ADDR, (unsigned int)SSD1289_REG_GDDRAM_DATA);
 }
 
 #endif /* LIDD_FB_REGS_H_ */
