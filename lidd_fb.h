@@ -113,11 +113,10 @@ struct lidd_par
     int           irq;              //irq resource number
     dma_addr_t    vram_phys;        //should be same as dma_start
     unsigned long vram_size;
-    void*         vram_virt;
-    unsigned int  dma_start;        //physical addresses
-    unsigned int  dma_end;
+    uint8_t*      vram_virt;
+    uint32_t      dma_start;        //physical addresses
+    uint32_t      dma_end;
     int           blank;            //?
-    int           suspending;       //whether a suspend is in progress
 };
 
 #endif /* LIDD_FB_H_ */

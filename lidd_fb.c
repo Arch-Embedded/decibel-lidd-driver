@@ -1,6 +1,6 @@
-/* Module for SSD1289 lcd with device tree support
+/* Module for st7789 lcd with device tree support
  *
- * Author: Cezary Gapinski <cezary.gapinski@gmail.com>
+ * Author: Chris Desjardins <chris@arch-embedded.com>
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License version 2 as published by
@@ -14,16 +14,9 @@
  * You should have received a copy of the GNU General Public License along with
  * this program.  If not, see <http://www.gnu.org/licenses/>.
  *
- * This module using
- * SSD1289 Framebuffer
- * Heavily modified for the AM335X Cortex MPU and Linux 3.x+
- *
- * Copyright (c) 2009 Jean-Christian de Rivaz
- * Copyright (c) 2012 Christopher Mitchell
- *
- * The Solomon Systech SSD1289 chip drive TFT screen up to 240x320. This
- * driver expect the SSD1289 to be connected to a 16 bits local bus and
- * to be set in the 16 bits parallel interface mode. To use it you must
+ * The Sitronix ST7789V chip drive TFT screen up to 240x320. This
+ * driver expect the ST7789V to be connected to an 8 bits local bus and
+ * to be set in the 8 bits parallel interface mode. To use it you must
  * define in dts file
 */
 
@@ -50,20 +43,22 @@
 #include <linux/dma-mapping.h>
 #include <linux/consolemap.h>
 #include <linux/suspend.h>
+#include <linux/workqueue.h>
 
 #include "lidd_fb.h"
 #include "lidd_fb_regs.h"
 
 #define DRIVER_NAME "lidd-lcd"
-#define LCD_NUM_BUFFERS 1       // was 2
+#define LCD_SCREEN_WIDTH     240
+#define LCD_SCREEN_HEIGHT    240
 
-static int ssd1289_setcolreg(unsigned regno, unsigned red, unsigned green, unsigned blue, unsigned transp, struct fb_info* info);
+static int panel_setcolreg(unsigned regno, unsigned red, unsigned green, unsigned blue, unsigned transp, struct fb_info* info);
 static int fb_ioctl(struct fb_info* info, unsigned int cmd, unsigned long arg);
 
-static struct fb_ops ssd1289_fbops =
+static struct fb_ops st7789v_fbops =
 {
     .owner        = THIS_MODULE,
-    .fb_setcolreg = ssd1289_setcolreg,
+    .fb_setcolreg = panel_setcolreg,
     .fb_fillrect = cfb_fillrect,
     .fb_copyarea = cfb_copyarea,
     .fb_imageblit = cfb_imageblit,
@@ -71,48 +66,97 @@ static struct fb_ops ssd1289_fbops =
 //	.fb_blank = sys_blank,
 };
 
-static struct fb_fix_screeninfo ssd1289_fix =
+static struct fb_fix_screeninfo panel_fix =
 {
     .id          = DRIVER_NAME,
     .type        = FB_TYPE_PACKED_PIXELS,
     .visual      = FB_VISUAL_TRUECOLOR,
     .accel       = FB_ACCEL_NONE,
-    .line_length = 240 * 2,
+    .line_length = LCD_SCREEN_WIDTH * 2,
 };
 
-static struct fb_var_screeninfo ssd1289_var =
+static struct fb_var_screeninfo panel_var =
 {
-    .xres       = 240,
-    .yres       = 320,
-    .xres_virtual   = 240,
-    .yres_virtual   = 320,
+    .xres       = LCD_SCREEN_WIDTH,
+    .yres       = LCD_SCREEN_HEIGHT,
+    .xres_virtual   = LCD_SCREEN_WIDTH,
+    .yres_virtual   = LCD_SCREEN_HEIGHT,
     .bits_per_pixel = 16,
-    .red        = {6, 5, 0},
-    .green      = {11, 5, 0},
-    .blue       = {0, 6, 0},
+    .red        = {11, 5, 0},
+    .green      = {5, 6, 0},
+    .blue       = {0, 5, 0},
     .activate   = FB_ACTIVATE_FORCE,    //FB_ACTIVATE_NOW,
-    .height     = 320,
-    .width      = 240,
+    .width      = LCD_SCREEN_HEIGHT,
+    .height     = LCD_SCREEN_HEIGHT,
     .vmode      = FB_VMODE_NONINTERLACED,
+    .pixclock   = 10000,
+    .left_margin = 6,
+    .right_margin = 8,
+    .upper_margin = 2,
+    .lower_margin = 2,
+    .hsync_len = 0,
+    .vsync_len = 0,
 };
+struct lidd_par* lidd_fb_priv;
 
 static int tilidd_suspend(struct device* dev);
 static int tilidd_resume(struct device* dev);
-static void lcd_context_save(struct lidd_par* item);
-static void lcd_context_restore(struct lidd_par* item);
+//static void lcd_context_save(struct lidd_par* item);
+//static void lcd_context_restore(struct lidd_par* item);
 
 static int lidd_video_alloc(struct lidd_par* item);
 static int lcd_cfg_dma(struct lidd_par* item, int burst_size, int fifo_th);
 
 static void lidd_dma_setstatus(struct lidd_par* item, int doenable);
-static irqreturn_t ssd1289_irq_handler(int irq, void* arg);
+static irqreturn_t lidd_dma_irq_handler(int irq, void* arg);
 
-static void ssd1289_setup(struct lidd_par* item);
+static void st7789v_setup(struct lidd_par* item);
 
-static void LCD_Clear(struct lidd_par* item, uint16_t Color);
-static void LCD_SetCursor(struct lidd_par* item, uint16_t Xpos, uint16_t Ypos);
+static void st7789v_StartFrame(struct lidd_par* item);
+static void st7789v_SetFrameDimensions(struct lidd_par* item, uint16_t Xpos, uint16_t Ypos);
 
-static int tillid_pdev_probe(struct platform_device* pdev)
+
+#define SET_RGB(r,g,b)      ((((r) & 0x1f) << 11)|(((g) & 0x3f) << 5) | (((b) & 0x1f) << 0))
+#define SET_VALHI(v)        (((v) & 0xff00) >> 8)
+#define SET_VALLO(v)        (((v) & 0x00ff) >> 0)
+
+static void setframe(struct lidd_par* item, int r, int g, int b)
+{
+    int index = 0;
+    int x, y;
+    int c = 0;
+    static int o = 0;
+    uint16_t *colors = (uint16_t*)item->vram_virt;
+    o++;
+    for (x = 0; x < LCD_SCREEN_WIDTH; x++)
+    {
+        for (y = 0; y < LCD_SCREEN_HEIGHT; y++)
+        {
+            c = x + o;
+            if (y > (LCD_SCREEN_HEIGHT / 2))
+            {
+                colors[index++] = SET_VALHI(SET_RGB(0, c, 0));
+                colors[index++] = SET_VALLO(SET_RGB(0, c, 0));
+            }
+            else
+            {
+                colors[index++] = SET_VALHI(SET_RGB(c, g, 0x1f-c));
+                colors[index++] = SET_VALLO(SET_RGB(c, g, 0x1f-c));
+            }
+        }
+    }
+}
+
+void my_work_handler(struct work_struct *work);
+DECLARE_DELAYED_WORK(my_work, my_work_handler);
+
+void my_work_handler(struct work_struct *work)
+{
+    setframe(lidd_fb_priv, 0,0,0);
+    st7789v_StartFrame(lidd_fb_priv);
+}
+
+static int tilidd_pdev_probe(struct platform_device* pdev)
 {
     struct device_node* node = pdev->dev.of_node;
     struct lidd_par* priv;
@@ -228,46 +272,33 @@ static int tillid_pdev_probe(struct platform_device* pdev)
     if (signature != 0x4F200800 && signature != 0x4F201000)
     {
         ret = -ENODEV;
-        dev_err(&pdev->dev,
-                "%s: unknown LCDC v2 controller signature 0x%08x\n", __func__, signature);
+        dev_err(&pdev->dev, "%s: unknown LCDC v2 controller signature 0x%08x\n", __func__, signature);
         goto out_clk_enable;
     }
 
     //Setting up AM335X LCDC Controller
     // Turn on LIDD clock and DMA clock, core clock doesn't help DMA :( ?
-    reg_write(priv, LCDC_CLK_ENABLE_REG,
-              LCDC_V2_DMA_CLK_EN | LCDC_V2_LIDD_CLK_EN | LCDC_V2_CORE_CLK_EN);
-    reg_write(priv, LCDC_CTRL_REG, 0 | LCDC_CLK_DIVISOR(6)); //100 MHz / 6
-    reg_write(priv, LCD_LIDD_CTRL, LCD_LIDD_TYPE_8080); // 8080 display, DMA (NOT YET) enabled
-    reg_write(priv, LCD_CS0_CONF,
-              (3 << CONF_TA_POS | 15 << R_HOLD_POS | 15 << R_STROBE_POS | 2 << R_SU_POS
-               | 2 << W_HOLD_POS | 2 << W_STROBE_POS | 1 << W_SU_POS));
+    reg_write(priv, LCDC_CLK_ENABLE_REG, LCDC_V2_DMA_CLK_EN | LCDC_V2_LIDD_CLK_EN | LCDC_V2_CORE_CLK_EN);
+    reg_write(priv, LCDC_CTRL_REG, 0 | LCDC_CLK_DIVISOR(1));
+    reg_write(priv, LCD_LIDD_CTRL, LCD_LIDD_TYPE_8080);
+    reg_write(priv, LCD_CS0_CONF, (1 << CONF_TA_POS | 9 << R_HOLD_POS | 36 << R_STROBE_POS | 1 << R_SU_POS | 4 << W_HOLD_POS | 2 << W_STROBE_POS | 1 << W_SU_POS));
+    reg_write(priv, LCDC_SYSCONFIG, 0x14);
+
     pr_debug("Initialized LCDC controller");
-
-    //SSD1289 LCD Driver Check
-    ssd1289_reg_set(priv, SSD1289_REG_OSCILLATION, 0x0001);
-    signature = ssd1289_reg_get(priv, SSD1289_REG_DEV_CODE_READ);
-    pr_debug("SSD1289 Reg value 0x%08x ", signature);
-
-    ssd1289_setup(priv);
-
-    //For tests lcd is filled red color
-    LCD_Clear(priv, Red);
-    pr_debug("LCD cleared to red\n");
+    st7789v_setup(priv);
 
     info = framebuffer_alloc(sizeof(struct lidd_par), &pdev->dev);
     if (!info)
     {
         ret = -ENOMEM;
-        dev_err(&pdev->dev,
-                "%s: unable to framebuffer_alloc\n", __func__);
+        dev_err(&pdev->dev, "%s: unable to framebuffer_alloc\n", __func__);
         goto out_clk_enable;
     }
     pr_debug("Framebuffer allocated\n");
 
     priv->info = info;
     info->par = priv;
-    info->fbops = &ssd1289_fbops;
+    info->fbops = &st7789v_fbops;
 
     // Palette setup
     priv->pseudo_palette[0] = 0;
@@ -284,25 +315,21 @@ static int tillid_pdev_probe(struct platform_device* pdev)
     pr_debug("End of get irq\n");
 
     info->flags = FBINFO_FLAG_DEFAULT;
-    info->fix = ssd1289_fix;
-    info->var = ssd1289_var;
-    fb_set_var(info, &ssd1289_var);
+    info->fix = panel_fix;
+    info->var = panel_var;
+    fb_set_var(info, &panel_var);
 
     ret = lidd_video_alloc(priv);
     if (ret)
     {
         ret = -ENOMEM;
-        dev_err(&pdev->dev,
-                "%s: unable to ssd1289_video_alloc\n", __func__);
+        dev_err(&pdev->dev, "%s: unable to ldd_video_alloc\n", __func__);
         goto out_info;
     }
 
     // Set up all kinds of fun DMA
-    reg_write(priv, LCDC_DMA_CTRL_REG, 0);                  // Start out with a blank slate
-    lcd_cfg_dma(priv, 16, 0);                               // DMA burst and FIFO threshold
-    reg_write(priv, LCDC_INT_ENABLE_SET_REG,
-              LCDC_V2_UNDERFLOW_INT_ENA | LCDC_SYNC_LOST | LCD_V2_DONE_INT_ENA);
-
+    lcd_cfg_dma(priv, 16, 0);
+    reg_write(priv, LCDC_INT_ENABLE_SET_REG, LCDC_FIFO_UNDERFLOW | LCDC_SYNC_LOST | LCDC_V2_DONE_INT_ENA);
     reg_write(priv, LCDC_DMA_FB_BASE_ADDR_0_REG, priv->dma_start);
     reg_write(priv, LCDC_DMA_FB_CEILING_ADDR_0_REG, priv->dma_end);
     reg_write(priv, LCDC_DMA_FB_BASE_ADDR_1_REG, priv->dma_start);
@@ -310,35 +337,28 @@ static int tillid_pdev_probe(struct platform_device* pdev)
 
     pr_debug("Finished video alloc\n");
 
-    info->fbops = &ssd1289_fbops;
-    ret = register_framebuffer(info);
+    //ret = register_framebuffer(info);
     if (ret < 0)
     {
         ret = -EIO;
-        dev_err(&pdev->dev,
-                "%s: unable to register_frambuffer\n", __func__);
+        dev_err(&pdev->dev, "%s: unable to register_frambuffer\n", __func__);
         goto out_pages;
     }
     dev_dbg(&pdev->dev, "Registered framebuffer.\n");
 
     // Set up LCD coordinates as necessary
-    ssd1289_reg_set(priv, SSD1289_REG_GDDRAM_X_ADDR, 0);
-    ssd1289_reg_set(priv, SSD1289_REG_GDDRAM_Y_ADDR, 0);
-    //set up for data before DMA begins
-    reg_write(priv, LCD_LIDD_CS0_ADDR, SSD1289_REG_GDDRAM_DATA);
 
     // Try to get IRQ for DMA
-    ret = request_irq(priv->irq, ssd1289_irq_handler, 0,
-                      DRIVER_NAME, priv);
+    ret = request_irq(priv->irq, lidd_dma_irq_handler, 0, DRIVER_NAME, priv);
     if (ret)
     {
         ret = -EIO;
         goto out_framebuffer;
     }
 
-    lidd_dma_setstatus(priv, 1);    //enable DMA
-
     dev_set_drvdata(&pdev->dev, priv);
+    lidd_fb_priv = priv;
+    schedule_delayed_work(&my_work, 1);
     pr_debug("Set drv data\n");
 
     return 0;
@@ -360,12 +380,11 @@ out_ioremap:
 out_item:
     kfree(priv);
 out:
-    printk(KERN_EMERG "failed to probe/init lidd ssd1289 driver\n");
-    dev_err(&pdev->dev, "failed to probe/init lidd ssd1289 driver\n");
+    printk(KERN_EMERG "failed to probe/init lidd driver\n");
     return ret;
 }
 
-static int tillid_pdev_remove(struct platform_device* pdev)
+static int tilidd_pdev_remove(struct platform_device* pdev)
 {
     struct lidd_par* priv = dev_get_drvdata(&pdev->dev);
     struct resource* res;
@@ -408,51 +427,37 @@ static int tillid_pdev_remove(struct platform_device* pdev)
 
 static int lidd_video_alloc(struct lidd_par* item)
 {
-    unsigned int frame_size;
+    int ret = 0;
     struct platform_device* pdev = item->pdev;
-    pr_debug("lidd_video_alloc start\n");
-
-    // Calculate raw framebuffer size
-    frame_size = item->info->fix.line_length * item->info->var.yres;
-    dev_dbg(&pdev->dev, "%s: frame_size=%u\n", __func__, frame_size);
-
-    pr_debug("After calculation frame_size\n");
-
     // Reserve DMA-able RAM, set up fix.
-    item->vram_size = frame_size * LCD_NUM_BUFFERS;
-    item->vram_virt = dma_alloc_coherent(&pdev->dev,
-                                         item->vram_size,
-                                         (resource_size_t*) &item->vram_phys,
-                                         GFP_KERNEL | GFP_DMA);
+    // Add * 2 becuase of the wasted 8 bits in each 16 bit word.
+    item->vram_size = (item->info->fix.line_length * item->info->var.yres * 2);
+    item->vram_virt = dma_alloc_coherent(&pdev->dev, item->vram_size, (resource_size_t*) &item->vram_phys, GFP_KERNEL | GFP_DMA);
     if (!item->vram_virt)
     {
         dev_err(&pdev->dev, "%s: unable to vmalloc\n", __func__);
-        return -ENOMEM;
+        ret = -ENOMEM;
     }
+    else
+    {
+        item->info->fix.smem_start = (unsigned long)(item->vram_virt);
+        item->info->fix.smem_len = item->vram_size;
 
-    pr_debug("after dma alloc\n");
+        item->info->screen_base = (char __iomem*)item->vram_virt;
+        item->info->screen_size = (unsigned int)item->vram_size;
 
-    memset(item->vram_virt, 0, item->vram_size);
-    item->info->fix.smem_start = (unsigned long)item->vram_virt;
-    item->info->fix.smem_len = item->vram_size;
-
-    item->info->screen_base = (char __iomem*)item->vram_virt;
-    item->info->screen_size = (unsigned int)item->vram_size;
-
-    item->dma_start = item->vram_phys;
-    item->dma_end   = item->dma_start + (item->info->var.yres * item->info->fix.line_length) - 1;
-    dev_dbg(&pdev->dev, "%s: DMA set from 0x%x to 0x%x, %ld bytes\n", __func__,
-            item->dma_start, item->dma_end, item->vram_size);
-
-    return 0;
+        item->dma_start = item->vram_phys;
+        item->dma_end   = item->dma_start + item->vram_size - 1;
+        printk("%s: DMA set from 0x%x to 0x%x, %ld bytes\n", __func__, item->dma_start, item->dma_end, item->vram_size);
+    }
+    return ret;
 }
 
 /* Configure the Burst Size and fifo threhold of DMA */
 static int lcd_cfg_dma(struct lidd_par* item, int burst_size, int fifo_th)
 {
-    u32 reg;
+    u32 reg = 0;
 
-    reg = (reg_read(item, LCDC_DMA_CTRL_REG) & 0x00000005); // | LCD_DUAL_FRAME_BUFFER_ENABLE; not for LIDD DMA??
     switch (burst_size)
     {
         case 1:
@@ -478,67 +483,45 @@ static int lcd_cfg_dma(struct lidd_par* item, int burst_size, int fifo_th)
         default:
             return -EINVAL;
     }
-
-    reg |= (fifo_th << 8);
-    reg |= BIT(2);                  // EOF_INTEN
+    reg |= LCDC_DMA_FIFO_THRESHOLD(fifo_th);
 
     reg_write(item, LCDC_DMA_CTRL_REG, reg);
 
     return 0;
 }
 
-/* IRQ handler for version 2 of LCDC */
-static irqreturn_t ssd1289_irq_handler(int irq, void* arg)
+static irqreturn_t lidd_dma_irq_handler(int irq, void* arg)
 {
     struct lidd_par* item = (struct lidd_par*)arg;
     u32 stat = reg_read(item, LCDC_MASKED_STAT_REG);
+    reg_write(item, LCDC_MASKED_STAT_REG, stat);
 
-    if ((stat & LCDC_SYNC_LOST) || (stat & LCDC_FIFO_UNDERFLOW))
+    if (stat & (LCDC_SYNC_LOST | LCDC_FIFO_UNDERFLOW))
     {
         printk(KERN_ERR "LCDC sync lost or underflow error occured\nNot sure what to do...\n");
-        reg_write(item, LCDC_MASKED_STAT_REG, stat);
     }
-    else
+    if (stat & LCDC_V2_DONE_INT_ENA)
     {
-        lidd_dma_setstatus(item, 0);    //disable DMA
-
-        reg_write(item, LCDC_MASKED_STAT_REG, stat);
-
-        ssd1289_reg_set(item, SSD1289_REG_GDDRAM_X_ADDR, 0);
-        ssd1289_reg_set(item, SSD1289_REG_GDDRAM_Y_ADDR, 0);
-        //set up for data before DMA begins
-        reg_write(item, LCD_LIDD_CS0_ADDR, SSD1289_REG_GDDRAM_DATA);
-
-        if (!item->suspending)   //Don't re-enable DMA if we want to suspend or disable the driver
-        {
-            lidd_dma_setstatus(item, 1); //enable DMA
-        }
-        else
-        {
-            item->suspending = 0;
-        }
+        lidd_dma_setstatus(item, 0);
+        schedule_delayed_work(&my_work, 0);
     }
-    //reg_write(item, LCD_END_OF_INT_IND_REG, 0); //not a thing...?
     return IRQ_HANDLED;
 }
 
 static void lidd_dma_setstatus(struct lidd_par* item, int doenable)
 {
-    //enable DMA
-    unsigned int cfg;
-
-    cfg = reg_read(item, LCD_LIDD_CTRL);
-    cfg = (cfg & ~BIT(8)) | ((doenable & 1) << 8);    //enable or disable DMA
-    reg_write(item, LCD_LIDD_CTRL, cfg);
+    reg_write(item, LCD_LIDD_CTRL, (reg_read(item, LCD_LIDD_CTRL) & ~BIT(8)) | ((doenable & 1) << 8));
 }
 
-static int ssd1289_suspend(struct platform_device* dev, pm_message_t state)
+static int st7789v_suspend(struct platform_device* dev, pm_message_t state)
 {
+    printk("st7789v_suspend\n");
     return 0;
 }
 
-static int ssd1289_resume(struct platform_device* dev)
+static int st7789v_resume(struct platform_device* dev)
 {
+    printk("st7789v_resume\n");
     return 0;
 }
 
@@ -551,32 +534,35 @@ static struct of_device_id cglidd_of_match[] = { { .compatible =
                                                        "cg,am33xx-lidd", }, { }, };
 MODULE_DEVICE_TABLE(of, cglidd_of_match);
 
-static struct platform_driver tillid_platform_driver =
-{ .probe = tillid_pdev_probe,
-  .remove = tillid_pdev_remove,
-  .resume = ssd1289_resume,
-  .suspend = ssd1289_suspend,
-  .driver =
-  {
-      .name = DRIVER_NAME,
-      .pm     = &tilidd_pm_ops,
-      .of_match_table = cglidd_of_match,
-  }, };
-
-static int __init tillid_fb_init(void)
+static struct platform_driver tilidd_platform_driver =
 {
-    pr_debug("Init tillid\n");
-    return platform_driver_register(&tillid_platform_driver);
+    .probe = tilidd_pdev_probe,
+    .remove = tilidd_pdev_remove,
+    .resume = st7789v_resume,
+    .suspend = st7789v_suspend,
+    .driver =
+    {
+        .name = DRIVER_NAME,
+        .pm     = &tilidd_pm_ops,
+        .of_match_table = cglidd_of_match,
+    },
+};
+
+static int __init tilidd_fb_init(void)
+{
+    printk("Init tilidd\n");
+    return platform_driver_register(&tilidd_platform_driver);
 }
 
-static void __exit tillid_fb_fini(void)
+static void __exit tilidd_fb_fini(void)
 {
-    pr_debug("Exit tillid\n");
-    platform_driver_unregister(&tillid_platform_driver);
+    printk("Exit tilidd\n");
+    platform_driver_unregister(&tilidd_platform_driver);
 }
 
 static int tilidd_suspend(struct device* dev)
 {
+    printk("tilidd_suspend\n");
 //	int i = 5000;
 //	u32 stat;
 //	struct ssd1289* item = (struct ssd1289*)dev->dev.platform_data;
@@ -596,7 +582,7 @@ static int tilidd_suspend(struct device* dev)
 //	lcdc_write(item,stat,LCD_MASKED_STAT_REG);
 //
 //	// PT=0 VLE=1 SPT=0 GON=1 DTE=1 CM=0 D=0 (Turn off the display)
-//	ssd1289_reg_set(item, SSD1289_REG_DISPLAY_CTRL, 0x0230);
+//	panel_reg_set(item, SSD1289_REG_DISPLAY_CTRL, 0x0230);
 //
 //	lcd_context_save(item);
     pm_runtime_put(dev);
@@ -607,6 +593,7 @@ static int tilidd_suspend(struct device* dev)
 
 static int tilidd_resume(struct device* dev)
 {
+    printk("tilidd_resume\n");
 //	struct llid_par* item = (struct llid_par9*)dev->dev.platform_data;
 
 //	console_lock();
@@ -619,8 +606,8 @@ static int tilidd_resume(struct device* dev)
 //	ssd1289_setup(item);
 
     // Set up LCD coordinates as necessary
-//	ssd1289_reg_set(item, SSD1289_REG_GDDRAM_X_ADDR, 0);
-//	ssd1289_reg_set(item, SSD1289_REG_GDDRAM_Y_ADDR, 0);
+//	panel_reg_set(item, SSD1289_REG_GDDRAM_X_ADDR, 0);
+//	panel_reg_set(item, SSD1289_REG_GDDRAM_Y_ADDR, 0);
 //	lcdc_write(item,SSD1289_REG_GDDRAM_DATA, LCD_LIDD_CS0_ADDR);	//set up for data before DMA begins
 //	fb_set_suspend(item->info, 0);
 //	ssd1289_dma_setstatus(item, 1);	//enable DMA
@@ -630,8 +617,9 @@ static int tilidd_resume(struct device* dev)
     return 0;
 }
 
-static void lcd_context_save(struct lidd_par* item)
-{
+//static void lcd_context_save(struct lidd_par* item)
+//{
+//    printk("lcd_context_save\n");
 //	reg_context.clk_enable = lcdc_read(item,LCD_CLK_ENABLE_REG);
 //	reg_context.ctrl = lcdc_read(item,LCD_CTRL);
 //	reg_context.dma_ctrl = lcdc_read(item,LCD_DMA_CTRL_REG);
@@ -644,11 +632,12 @@ static void lcd_context_save(struct lidd_par* item)
 //		lcdc_read(item,LCD_DMA_FRM_BUF_BASE_ADDR_1_REG);
 //	reg_context.dma_frm_buf_ceiling_addr_1 =
 //		lcdc_read(item,LCD_DMA_FRM_BUF_CEILING_ADDR_1_REG);
-    return;
-}
+//    return;
+//}
 
-static void lcd_context_restore(struct lidd_par* item)
-{
+//static void lcd_context_restore(struct lidd_par* item)
+//{
+//    printk("lcd_context_restore\n");
 //	lcdc_write(item,reg_context.clk_enable, LCD_CLK_ENABLE_REG);
 //	lcdc_write(item,reg_context.ctrl, LCD_CTRL);
 //	lcdc_write(item,reg_context.dma_ctrl, LCD_DMA_CTRL_REG);
@@ -661,111 +650,70 @@ static void lcd_context_restore(struct lidd_par* item)
 //			LCD_DMA_FRM_BUF_BASE_ADDR_1_REG);
 //	lcdc_write(item,reg_context.dma_frm_buf_ceiling_addr_1,
 //			LCD_DMA_FRM_BUF_CEILING_ADDR_1_REG);
-    return;
-}
+//    return;
+//}
 
-static void ssd1289_setup(struct lidd_par* item)
+static void panel_regs_set(struct lidd_par* item, u8 reg, u16* values, int numValues)
 {
-    // OSCEN=1
-    ssd1289_reg_set(item, SSD1289_REG_OSCILLATION, 0x0001);
-    // DCT=b1010=fosc/4 BT=b001=VGH:+6,VGL:-4
-    // DC=b1010=fosc/4 AP=b010=small to medium
-    ssd1289_reg_set(item, SSD1289_REG_POWER_CTRL_1, 0xa2a4);
-    // VRC=b100:5.5V
-    ssd1289_reg_set(item, SSD1289_REG_POWER_CTRL_2, 0x0004);
-    // VRH=b1000:Vref*2.165
-    ssd1289_reg_set(item, SSD1289_REG_POWER_CTRL_3, 0x0308);
-    // VCOMG=1 VDV=b1000:VLCD63*1.05
-    ssd1289_reg_set(item, SSD1289_REG_POWER_CTRL_4, 0x3000);
-    // nOTP=1 VCM=0x2a:VLCD63*0.77
-    ssd1289_reg_set(item, SSD1289_REG_POWER_CTRL_5, 0x00ea);
-    // RL=0 REV=1 CAD=0 BGR=1 SM=0 TB=1 MUX=0x13f=319
-    ssd1289_reg_set(item, SSD1289_REG_DRIVER_OUT_CTRL, 0x2b3f);
-    // FLD=0 ENWS=0 D/C=1 EOR=1 WSMD=0 NW=0x00=0
-    ssd1289_reg_set(item, SSD1289_REG_LCD_DRIVE_AC, 0x0600);
-    // SLP=0
-    ssd1289_reg_set(item, SSD1289_REG_SLEEP_MODE, 0x0000);
-
-    msleep(40);
-    // VSMode=0 DFM=3:65k TRAMS=0 OEDef=0 WMode=0 Dmode=0
-    // TY=0 ID=3 AM=0 LG=0
-    ssd1289_reg_set(item, SSD1289_REG_ENTRY_MODE, 0x6030);
-    // PT=0 VLE=1 SPT=0 GON=1 DTE=1 CM=0 D=3
-    ssd1289_reg_set(item, SSD1289_REG_DISPLAY_CTRL, 0x0233);
-    // NO=0 SDT=0 EQ=0 DIV=0 SDIV=1 SRTN=1 RTN=9:25 clock
-    // ssd1289_reg_set(item, SSD1289_REG_FRAME_CYCLE, 0x0039);
-    // NO=0 SDT=0 EQ=0 DIV=0 SDIV=0 SRTN=0 RTN=9:25 clock
-    ssd1289_reg_set(item, SSD1289_REG_FRAME_CYCLE, 0x0009);
-    // SCN=0
-    ssd1289_reg_set(item, SSD1289_REG_GATE_SCAN_START, 0x0000);
-
-    // PKP1=7 PKP0=7
-    ssd1289_reg_set(item, SSD1289_REG_GAMMA_CTRL_1, 0x0707);
-    // PKP3=2 PKP2=4
-    ssd1289_reg_set(item, SSD1289_REG_GAMME_CTRL_2, 0x0204);
-    // PKP5=2 PKP4=2
-    ssd1289_reg_set(item, SSD1289_REG_GAMMA_CTRL_3, 0x0204);
-    // PRP1=5 PRP0=2
-    ssd1289_reg_set(item, SSD1289_REG_GAMMA_CTRL_4, 0x0502);
-    // PKN1=5 PKN0=7
-    ssd1289_reg_set(item, SSD1289_REG_GAMMA_CTRL_5, 0x0507);
-    // PKN3=2 PNN2=4
-    ssd1289_reg_set(item, SSD1289_REG_GAMMA_CTRL_6, 0x0204);
-    // PKN5=2 PKN4=4
-    ssd1289_reg_set(item, SSD1289_REG_GAMMA_CTRL_7, 0x0204);
-    // PRN1=5 PRN0=2
-    ssd1289_reg_set(item, SSD1289_REG_GAMMA_CTRL_8, 0x0502);
-    // VRP1=3 VRP0=2
-    ssd1289_reg_set(item, SSD1289_REG_GAMMA_CTRL_9, 0x0302);
-    // VRN1=3 VRN0=2
-    ssd1289_reg_set(item, SSD1289_REG_GAMMA_CTRL_10, 0x0302);
-
-    // WMR=0 WMG=0
-    ssd1289_reg_set(item, SSD1289_REG_WR_DATA_MASK_1, 0x0000);
-    // WMB=0
-    ssd1289_reg_set(item, SSD1289_REG_WR_DATA_MASK_2, 0x0000);
-    // OSC=b1010:548k
-    ssd1289_reg_set(item, SSD1289_REG_FRAME_FREQUENCY, 0xa000);
-    // SS1=0
-    ssd1289_reg_set(item, SSD1289_REG_FIRST_WIN_START, 0x0000);
-    // SE1=319
-    ssd1289_reg_set(item, SSD1289_REG_FIRST_WIN_END,
-                    (320 - 1));
-    // SS2=0
-    ssd1289_reg_set(item, SSD1289_REG_SECND_WIN_START, 0x0000);
-    // SE2=0
-    ssd1289_reg_set(item, SSD1289_REG_SECND_WIN_END, 0x0000);
-    // VL1=0
-    ssd1289_reg_set(item, SSD1289_REG_V_SCROLL_CTRL_1, 0x0000);
-    // VL2=0
-    ssd1289_reg_set(item, SSD1289_REG_V_SCROLL_CTRL_2, 0x0000);
-    // HEA=0xef=239 HSA=0
-    ssd1289_reg_set(item, SSD1289_REG_H_RAM_ADR_POS,
-                    (240 - 1) << 8);
-    // VSA=0
-    ssd1289_reg_set(item, SSD1289_REG_V_RAM_ADR_START, 0x0000);
-    // VEA=0x13f=319
-    ssd1289_reg_set(item, SSD1289_REG_V_RAM_ADR_END,
-                    (320 - 1));
+    int i;
+    reg_write(item, LCD_LIDD_CS0_ADDR, reg);
+    for (i = 0; i < numValues; i++)
+    {
+        reg_write(item, LCD_LIDD_CS0_DATA, values[i]);
+    }
 }
 
-static int ssd1289_setcolreg(unsigned regno, unsigned red, unsigned green,
+static void panel_reg_set(struct lidd_par* item, u8 reg, u16 value)
+{
+    panel_regs_set(item, reg, &value, 1);
+}
+
+static void st7789v_setup(struct lidd_par* item)
+{
+    u16 porctrl[] = { 0x0c, 0x0c, 0x00, 0x33, 0x33 };
+    u16 pwctrl1[] = { 0xA4, 0xA1 };
+    u16 pvgamctrl[] = { 0xf0, 0x08, 0x0E, 0x09, 0x08, 0x04, 0x2F, 0x33, 0x45, 0x36, 0x13, 0x12, 0x2A, 0x2D };
+    u16 nvgamctrl[] = { 0xf0, 0x0E, 0x12, 0x0C, 0x0A, 0x15, 0x2E, 0x32, 0x44, 0x39, 0x17, 0x18, 0x2B, 0x2F };
+
+    reg_write(item, LCD_LIDD_CS0_ADDR, ST7789V_SWRESET);
+    msleep(120);
+
+    reg_write(item, LCD_LIDD_CS0_ADDR, ST7789V_SLPOUT);
+    msleep(120);
+
+    panel_reg_set(item, ST7789V_MADCTL, 0x20);
+    panel_reg_set(item, ST7789V_COLMOD, 0x55);
+    panel_regs_set(item, ST7789V_PORCTRL, porctrl, ARRAY_SIZE(porctrl));
+    panel_reg_set(item, ST7789V_GCTRL, 0x00);
+    panel_reg_set(item, ST7789V_VCOMS, 0x36);
+
+    panel_reg_set(item, ST7789V_VDVVRHEN, 0x01);
+    panel_reg_set(item, ST7789V_VRHS, 0x13);
+    panel_reg_set(item, ST7789V_VDVS, 0x20);
+
+    panel_reg_set(item, ST7789V_FRCTRL2, 0x0F);
+    panel_regs_set(item, ST7789V_PWCTRL1, pwctrl1, ARRAY_SIZE(pwctrl1));
+
+    panel_regs_set(item, ST7789V_PVGAMCTRL, pvgamctrl, ARRAY_SIZE(pvgamctrl));
+    panel_regs_set(item, ST7789V_NVGAMCTRL, nvgamctrl, ARRAY_SIZE(nvgamctrl));
+
+    reg_write(item, LCD_LIDD_CS0_ADDR, ST7789V_INVON);
+    reg_write(item, LCD_LIDD_CS0_ADDR, ST7789V_DISPON);
+    st7789v_SetFrameDimensions(item, 0, 0);
+}
+
+static int panel_setcolreg(unsigned regno, unsigned red, unsigned green,
                              unsigned blue, unsigned transp,
                              struct fb_info* info)
 {
     struct lidd_par* par = info->par;
+    int ret = 0;
 
-    if (regno >= 16)
+    if ((regno >= 16) || (info->fix.visual == FB_VISUAL_DIRECTCOLOR))
     {
-        return 1;
+        ret = 1;
     }
-
-    if (info->fix.visual == FB_VISUAL_DIRECTCOLOR)
-    {
-        return 1;
-    }
-
-    if ((info->var.bits_per_pixel == 16) && regno < 16)
+    else if ((info->var.bits_per_pixel == 16) && regno < 16)
     {
         red >>= (16 - info->var.red.length);
         red <<= info->var.red.offset;
@@ -778,8 +726,7 @@ static int ssd1289_setcolreg(unsigned regno, unsigned red, unsigned green,
 
         par->pseudo_palette[regno] = red | green | blue;
     }
-
-    return 0;
+    return ret;
 }
 
 static int fb_ioctl(struct fb_info* info, unsigned int cmd, unsigned long arg)
@@ -796,27 +743,34 @@ static int fb_ioctl(struct fb_info* info, unsigned int cmd, unsigned long arg)
     }
 }
 
-static void LCD_Clear(struct lidd_par* item, uint16_t Color)
+static void st7789v_SetFrameDimensions(struct lidd_par* item, uint16_t Xpos, uint16_t Ypos)
 {
-    uint32_t index = 0;
-    LCD_SetCursor(item, 0, 0);
-    LCD_WriteRAM_Prepare(item); /* Prepare to write GRAM */
-    for (index = 0; index < 76800; index++)
-    {
-        reg_write(item, LCD_LIDD_CS0_DATA, (unsigned int)Color);
-    }
+    uint16_t params[4];
+    uint16_t end = (Xpos + LCD_SCREEN_WIDTH - 1);
+    params[0] = SET_VALHI(Xpos);
+    params[1] = SET_VALLO(Xpos);
+    params[2] = SET_VALHI(end);
+    params[3] = SET_VALLO(end);
+    panel_regs_set(item, ST7789V_CASET, params, ARRAY_SIZE(params));
+
+    end = (Ypos + LCD_SCREEN_HEIGHT - 1);
+    params[0] = SET_VALHI(Ypos);
+    params[1] = SET_VALLO(Ypos);
+    params[2] = SET_VALHI(end);
+    params[3] = SET_VALLO(end);
+    panel_regs_set(item, ST7789V_RASET, params, ARRAY_SIZE(params));
 }
 
-static void LCD_SetCursor(struct lidd_par* item, uint16_t Xpos, uint16_t Ypos)
+static void st7789v_StartFrame(struct lidd_par* item)
 {
-    ssd1289_reg_set(item, SSD1289_REG_GDDRAM_X_ADDR, Xpos); /* Row */
-    ssd1289_reg_set(item, SSD1289_REG_GDDRAM_Y_ADDR, Ypos); /* Line */
+    reg_write(item, LCD_LIDD_CS0_ADDR, ST7789V_RAMWR);
+    lidd_dma_setstatus(item, 1);
 }
 
-module_init(tillid_fb_init);
-module_exit(tillid_fb_fini);
+module_init(tilidd_fb_init);
+module_exit(tilidd_fb_fini);
 
-MODULE_AUTHOR("Cezary Gapinski");
+MODULE_AUTHOR("Chris Desjardins");
 MODULE_DESCRIPTION("TI LLID LCD Module");
 MODULE_LICENSE("GPL");
 MODULE_VERSION("0.1");

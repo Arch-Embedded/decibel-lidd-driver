@@ -8,25 +8,14 @@
 #ifndef LIDD_FB_REGS_H_
 #define LIDD_FB_REGS_H_
 
-/* LCDC Status Register */
-#define LCDC_END_OF_FRAME1                       BIT(9)
-#define LCDC_END_OF_FRAME0                       BIT(8)
-#define LCDC_PL_LOAD_DONE                        BIT(6)
-#define LCDC_FIFO_UNDERFLOW                      BIT(5)
-#define LCDC_SYNC_LOST                           BIT(2)
-#define LCDC_FRAME_DONE                          BIT(0)
-
 /* LCDC DMA Control Register */
-#define LCDC_DMA_BURST_SIZE(x)                   ((x) << 4)
+#define LCDC_DMA_BURST_SIZE(x)                   ((x & 0x07) << 4)
 #define LCDC_DMA_BURST_1                         0x0
 #define LCDC_DMA_BURST_2                         0x1
 #define LCDC_DMA_BURST_4                         0x2
 #define LCDC_DMA_BURST_8                         0x3
 #define LCDC_DMA_BURST_16                        0x4
-#define LCDC_V1_END_OF_FRAME_INT_ENA             BIT(2)
-#define LCDC_V2_END_OF_FRAME0_INT_ENA            BIT(8)
-#define LCDC_V2_END_OF_FRAME1_INT_ENA            BIT(9)
-#define LCDC_DUAL_FRAME_BUFFER_ENABLE            BIT(0)
+#define LCDC_DMA_FIFO_THRESHOLD(t)               ((t & 0x07) << 8)
 
 /* LCDC Control Register */
 #define LCDC_CLK_DIVISOR(x)                      ((x) << 8)
@@ -37,27 +26,17 @@
 #define PALETTE_AND_DATA                         0x00
 #define PALETTE_ONLY                             0x01
 #define DATA_ONLY                                0x02
-
-#define LCDC_MONO_8BIT_MODE                      BIT(9)
-#define LCDC_RASTER_ORDER                        BIT(8)
-#define LCDC_TFT_MODE                            BIT(7)
-#define LCDC_V1_UNDERFLOW_INT_ENA                BIT(6)
-#define LCDC_V2_UNDERFLOW_INT_ENA                BIT(5)
-#define LCDC_V1_PL_INT_ENA                       BIT(4)
-#define LCDC_V2_PL_INT_ENA                       BIT(6)
-#define LCDC_MONOCHROME_MODE                     BIT(1)
-#define LCDC_RASTER_ENABLE                       BIT(0)
-#define LCDC_TFT_ALT_ENABLE                      BIT(23)
-#define LCDC_STN_565_ENABLE                      BIT(24)
+/* Cloc enable register */
 #define LCDC_V2_DMA_CLK_EN                       BIT(2)
 #define LCDC_V2_LIDD_CLK_EN                      BIT(1)
 #define LCDC_V2_CORE_CLK_EN                      BIT(0)
-#define LCDC_V2_LPP_B10                          26
-#define LCDC_V2_TFT_24BPP_MODE                   BIT(25)
-#define LCDC_V2_TFT_24BPP_UNPACK                 BIT(26)
-#define LCD_V2_END_OF_FRAME0_INT_ENA    BIT(8)
-#define LCD_V2_END_OF_FRAME1_INT_ENA    BIT(9)
-#define LCD_V2_DONE_INT_ENA                 BIT(0)
+
+/* Interrupt enable and status registers */
+#define LCDC_V2_END_OF_FRAME0_INT_ENA            BIT(8)
+#define LCDC_V2_END_OF_FRAME1_INT_ENA            BIT(9)
+#define LCDC_FIFO_UNDERFLOW                      BIT(5)
+#define LCDC_SYNC_LOST                           BIT(2)
+#define LCDC_V2_DONE_INT_ENA                     BIT(0)
 
 /* LCDC Raster Timing 2 Register */
 #define LCDC_AC_BIAS_TRANSITIONS_PER_INT(x)      ((x) << 16)
@@ -95,6 +74,7 @@
 #define LCDC_DMA_FB_CEILING_ADDR_0_REG           0x48
 #define LCDC_DMA_FB_BASE_ADDR_1_REG              0x4c
 #define LCDC_DMA_FB_CEILING_ADDR_1_REG           0x50
+#define LCDC_SYSCONFIG                           0x54
 
 /* Interrupt Registers available only in Version 2 */
 #define LCDC_RAW_STAT_REG                        0x58
@@ -110,45 +90,29 @@
 
 #define LCD_LIDD_TYPE_8080                      BIT(0) | BIT(1)
 
-#define SSD1289_REG_OSCILLATION      0x00
-#define SSD1289_REG_DEV_CODE_READ    0x00
-#define SSD1289_REG_DRIVER_OUT_CTRL  0x01
-#define SSD1289_REG_LCD_DRIVE_AC     0x02
-#define SSD1289_REG_POWER_CTRL_1     0x03
-#define SSD1289_REG_DISPLAY_CTRL     0x07
-#define SSD1289_REG_FRAME_CYCLE      0x0b
-#define SSD1289_REG_POWER_CTRL_2     0x0c
-#define SSD1289_REG_POWER_CTRL_3     0x0d
-#define SSD1289_REG_POWER_CTRL_4     0x0e
-#define SSD1289_REG_GATE_SCAN_START  0x0f
-#define SSD1289_REG_SLEEP_MODE       0x10
-#define SSD1289_REG_ENTRY_MODE       0x11
-#define SSD1289_REG_POWER_CTRL_5     0x1e
-#define SSD1289_REG_GDDRAM_DATA      0x22
-#define SSD1289_REG_WR_DATA_MASK_1   0x23
-#define SSD1289_REG_WR_DATA_MASK_2   0x24
-#define SSD1289_REG_FRAME_FREQUENCY  0x25
-#define SSD1289_REG_GAMMA_CTRL_1     0x30
-#define SSD1289_REG_GAMME_CTRL_2     0x31
-#define SSD1289_REG_GAMMA_CTRL_3     0x32
-#define SSD1289_REG_GAMMA_CTRL_4     0x33
-#define SSD1289_REG_GAMMA_CTRL_5     0x34
-#define SSD1289_REG_GAMMA_CTRL_6     0x35
-#define SSD1289_REG_GAMMA_CTRL_7     0x36
-#define SSD1289_REG_GAMMA_CTRL_8     0x37
-#define SSD1289_REG_GAMMA_CTRL_9     0x3a
-#define SSD1289_REG_GAMMA_CTRL_10    0x3b
-#define SSD1289_REG_V_SCROLL_CTRL_1  0x41
-#define SSD1289_REG_V_SCROLL_CTRL_2  0x42
-#define SSD1289_REG_H_RAM_ADR_POS    0x44
-#define SSD1289_REG_V_RAM_ADR_START  0x45
-#define SSD1289_REG_V_RAM_ADR_END    0x46
-#define SSD1289_REG_FIRST_WIN_START  0x48
-#define SSD1289_REG_FIRST_WIN_END    0x49
-#define SSD1289_REG_SECND_WIN_START  0x4a
-#define SSD1289_REG_SECND_WIN_END    0x4b
-#define SSD1289_REG_GDDRAM_X_ADDR    0x4e
-#define SSD1289_REG_GDDRAM_Y_ADDR    0x4f
+#define ST7789V_SWRESET              0x01
+#define ST7789V_RDDID                0x04
+#define ST7789V_SLPOUT               0x11
+#define ST7789V_INVON                0x21
+#define ST7789V_DISPON               0x29
+#define ST7789V_CASET                0x2A
+#define ST7789V_RASET                0x2B
+#define ST7789V_RAMWR                0x2C
+#define ST7789V_MADCTL               0x36
+#define ST7789V_COLMOD               0x3A
+#define ST7789V_PORCTRL              0xB2
+#define ST7789V_GCTRL                0xB7
+#define ST7789V_VCOMS                0xBB
+#define ST7789V_VDVVRHEN             0xC2
+#define ST7789V_VRHS                 0xC3
+#define ST7789V_VDVS                 0xC4
+#define ST7789V_FRCTRL2              0xC6
+#define ST7789V_PWCTRL1              0xD0
+#define ST7789V_RDID1                0xDA
+#define ST7789V_RDID2                0xDB
+#define ST7789V_RDID3                0xDC
+#define ST7789V_PVGAMCTRL            0xE0
+#define ST7789V_NVGAMCTRL            0xE1
 
 /*
  * Helpers:
@@ -188,24 +152,6 @@ static inline u32 llid_read_irqstatus(struct lidd_par* par)
 static inline void llid_clear_irqstatus(struct lidd_par* par, u32 mask)
 {
     reg_write(par, llid_irqstatus_reg(par), mask);
-}
-
-static inline void ssd1289_reg_set(struct lidd_par* item, unsigned char reg,
-                                   unsigned short value)
-{
-    reg_write(item, LCD_LIDD_CS0_ADDR, 0x000000FF & (unsigned int)reg);
-    reg_write(item, LCD_LIDD_CS0_DATA, (unsigned int)value);
-}
-
-static inline unsigned int ssd1289_reg_get(struct lidd_par* item, unsigned char reg)
-{
-    reg_write(item, LCD_LIDD_CS0_ADDR, 0x000000FF & (unsigned int)reg);
-    return reg_read(item, LCD_LIDD_CS0_DATA);
-}
-
-static inline void LCD_WriteRAM_Prepare(struct lidd_par* item)
-{
-    reg_write(item, LCD_LIDD_CS0_ADDR, (unsigned int)SSD1289_REG_GDDRAM_DATA);
 }
 
 #endif /* LIDD_FB_REGS_H_ */
