@@ -84,7 +84,6 @@ struct lidd_par
     } txbuf;
     u8* buf;
     u8  startbyte;
-    struct lidd_framebuffer_ops ops;
     spinlock_t dirty_lock;
     unsigned   dirty_lines_start;
     unsigned   dirty_lines_end;
@@ -119,4 +118,6 @@ struct lidd_par
     int           blank;            //?
 };
 
+#define SET_VALHI(v)        (((v) & 0xff00) >> 8)
+#define SET_VALLO(v)        (((v) & 0x00ff) >> 0)
 #endif /* LIDD_FB_H_ */

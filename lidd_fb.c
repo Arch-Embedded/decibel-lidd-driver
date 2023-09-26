@@ -52,18 +52,37 @@
 #define LCD_SCREEN_WIDTH     240
 #define LCD_SCREEN_HEIGHT    240
 
-static int panel_setcolreg(unsigned regno, unsigned red, unsigned green, unsigned blue, unsigned transp, struct fb_info* info);
+static int tilidd_suspend(struct device* dev);
+static int tilidd_resume(struct device* dev);
+//static void lcd_context_save(struct lidd_par* item);
+//static void lcd_context_restore(struct lidd_par* item);
+
+static int lidd_video_alloc(struct lidd_par* item);
+static int lcd_cfg_dma(struct lidd_par* item, int burst_size, int fifo_th);
+
+static void lidd_dma_setstatus(struct lidd_par* item, int doenable);
+static irqreturn_t lidd_dma_irq_handler(int irq, void* arg);
+
+static void st7789v_setup(struct lidd_par* item);
+
+static void st7789v_SetFrameDimensions(struct lidd_par* item, uint16_t Xpos, uint16_t Ypos);
+
+static int fb_setcolreg(unsigned regno, unsigned red, unsigned green, unsigned blue, unsigned transp, struct fb_info* info);
 static int fb_ioctl(struct fb_info* info, unsigned int cmd, unsigned long arg);
+static void fb_fillrect(struct fb_info *p, const struct fb_fillrect *rect);
+static void fb_copyarea(struct fb_info *p, const struct fb_copyarea *area);
+void fb_imageblit(struct fb_info *p, const struct fb_image *image);
+static void lidd_fb_startdma_worker(struct work_struct *work);
 
 static struct fb_ops st7789v_fbops =
 {
     .owner        = THIS_MODULE,
-    .fb_setcolreg = panel_setcolreg,
-    .fb_fillrect = cfb_fillrect,
-    .fb_copyarea = cfb_copyarea,
-    .fb_imageblit = cfb_imageblit,
+    .fb_setcolreg = fb_setcolreg,
+    .fb_fillrect = fb_fillrect,
+    .fb_copyarea = fb_copyarea,
+    .fb_imageblit = fb_imageblit,
     .fb_ioctl = fb_ioctl,
-//	.fb_blank = sys_blank,
+//  .fb_blank = sys_blank,
 };
 
 static struct fb_fix_screeninfo panel_fix =
@@ -97,31 +116,15 @@ static struct fb_var_screeninfo panel_var =
     .hsync_len = 0,
     .vsync_len = 0,
 };
+
 struct lidd_par* lidd_fb_priv;
-
-static int tilidd_suspend(struct device* dev);
-static int tilidd_resume(struct device* dev);
-//static void lcd_context_save(struct lidd_par* item);
-//static void lcd_context_restore(struct lidd_par* item);
-
-static int lidd_video_alloc(struct lidd_par* item);
-static int lcd_cfg_dma(struct lidd_par* item, int burst_size, int fifo_th);
-
-static void lidd_dma_setstatus(struct lidd_par* item, int doenable);
-static irqreturn_t lidd_dma_irq_handler(int irq, void* arg);
-
-static void st7789v_setup(struct lidd_par* item);
-
-static void st7789v_StartFrame(struct lidd_par* item);
-static void st7789v_SetFrameDimensions(struct lidd_par* item, uint16_t Xpos, uint16_t Ypos);
-
+DECLARE_DELAYED_WORK(my_work, lidd_fb_startdma_worker);
 
 #define SET_RGB(r,g,b)      ((((r) & 0x1f) << 11)|(((g) & 0x3f) << 5) | (((b) & 0x1f) << 0))
-#define SET_VALHI(v)        (((v) & 0xff00) >> 8)
-#define SET_VALLO(v)        (((v) & 0x00ff) >> 0)
 
 static void setframe(struct lidd_par* item, int r, int g, int b)
 {
+#if 0
     int index = 0;
     int x, y;
     int c = 0;
@@ -145,15 +148,15 @@ static void setframe(struct lidd_par* item, int r, int g, int b)
             }
         }
     }
+#endif
 }
 
-void my_work_handler(struct work_struct *work);
-DECLARE_DELAYED_WORK(my_work, my_work_handler);
 
-void my_work_handler(struct work_struct *work)
+static void lidd_fb_startdma_worker(struct work_struct *work)
 {
     setframe(lidd_fb_priv, 0,0,0);
-    st7789v_StartFrame(lidd_fb_priv);
+    reg_write(lidd_fb_priv, LCD_LIDD_CS0_ADDR, ST7789V_RAMWR);
+    lidd_dma_setstatus(lidd_fb_priv, 1);
 }
 
 static int tilidd_pdev_probe(struct platform_device* pdev)
@@ -240,11 +243,11 @@ static int tilidd_pdev_probe(struct platform_device* pdev)
 
     pr_debug("pm_runtime enabled\n");
 
-//	pm_set_vt_switch(0);
+//  pm_set_vt_switch(0);
 
-//	pr_debug("pm_set_vt_switched\n");
+//  pr_debug("pm_set_vt_switched\n");
     //pm_runtime_irq_safe(&pdev->dev);
-//	pr_debug("pm_runtime_irq_safed\n");
+//  pr_debug("pm_runtime_irq_safed\n");
     pm_runtime_get_sync(&pdev->dev);
     pr_debug("pm_get sync\n");
 
@@ -332,12 +335,10 @@ static int tilidd_pdev_probe(struct platform_device* pdev)
     reg_write(priv, LCDC_INT_ENABLE_SET_REG, LCDC_FIFO_UNDERFLOW | LCDC_SYNC_LOST | LCDC_V2_DONE_INT_ENA);
     reg_write(priv, LCDC_DMA_FB_BASE_ADDR_0_REG, priv->dma_start);
     reg_write(priv, LCDC_DMA_FB_CEILING_ADDR_0_REG, priv->dma_end);
-    reg_write(priv, LCDC_DMA_FB_BASE_ADDR_1_REG, priv->dma_start);
-    reg_write(priv, LCDC_DMA_FB_CEILING_ADDR_1_REG, priv->dma_end);
 
     pr_debug("Finished video alloc\n");
 
-    //ret = register_framebuffer(info);
+    ret = register_framebuffer(info);
     if (ret < 0)
     {
         ret = -EIO;
@@ -345,8 +346,6 @@ static int tilidd_pdev_probe(struct platform_device* pdev)
         goto out_pages;
     }
     dev_dbg(&pdev->dev, "Registered framebuffer.\n");
-
-    // Set up LCD coordinates as necessary
 
     // Try to get IRQ for DMA
     ret = request_irq(priv->irq, lidd_dma_irq_handler, 0, DRIVER_NAME, priv);
@@ -440,6 +439,7 @@ static int lidd_video_alloc(struct lidd_par* item)
     }
     else
     {
+        memset(item->vram_virt, 0, item->vram_size);
         item->info->fix.smem_start = (unsigned long)(item->vram_virt);
         item->info->fix.smem_len = item->vram_size;
 
@@ -530,8 +530,7 @@ static const struct dev_pm_ops tilidd_pm_ops =
     SET_SYSTEM_SLEEP_PM_OPS(tilidd_suspend, tilidd_resume)
 };
 
-static struct of_device_id cglidd_of_match[] = { { .compatible =
-                                                       "cg,am33xx-lidd", }, { }, };
+static struct of_device_id cglidd_of_match[] = { { .compatible = "cg,am33xx-lidd", }, { }, };
 MODULE_DEVICE_TABLE(of, cglidd_of_match);
 
 static struct platform_driver tilidd_platform_driver =
@@ -563,30 +562,30 @@ static void __exit tilidd_fb_fini(void)
 static int tilidd_suspend(struct device* dev)
 {
     printk("tilidd_suspend\n");
-//	int i = 5000;
-//	u32 stat;
-//	struct ssd1289* item = (struct ssd1289*)dev->dev.platform_data;
+//  int i = 5000;
+//  u32 stat;
+//  struct ssd1289* item = (struct ssd1289*)dev->dev.platform_data;
 //
-//	console_lock();
-//	fb_set_suspend(item->info, 1);
-//	item->suspending = 1;
-//	do {
-//		mdelay(1);
-//	} while (item->suspending && (i--));
+//  console_lock();
+//  fb_set_suspend(item->info, 1);
+//  item->suspending = 1;
+//  do {
+//      mdelay(1);
+//  } while (item->suspending && (i--));
 //
-//	if (item->suspending) {
-//		dev_err(&dev->dev,"Failed to suspend %s driver\n",DRIVER_NAME);
-//		return 1;
-//	}
-//	stat = lcdc_read(item,LCD_STAT_REG);
-//	lcdc_write(item,stat,LCD_MASKED_STAT_REG);
+//  if (item->suspending) {
+//      dev_err(&dev->dev,"Failed to suspend %s driver\n",DRIVER_NAME);
+//      return 1;
+//  }
+//  stat = lcdc_read(item,LCD_STAT_REG);
+//  lcdc_write(item,stat,LCD_MASKED_STAT_REG);
 //
-//	// PT=0 VLE=1 SPT=0 GON=1 DTE=1 CM=0 D=0 (Turn off the display)
-//	panel_reg_set(item, SSD1289_REG_DISPLAY_CTRL, 0x0230);
+//  // PT=0 VLE=1 SPT=0 GON=1 DTE=1 CM=0 D=0 (Turn off the display)
+//  panel_reg_set(item, SSD1289_REG_DISPLAY_CTRL, 0x0230);
 //
-//	lcd_context_save(item);
+//  lcd_context_save(item);
     pm_runtime_put(dev);
-//	console_unlock();
+//  console_unlock();
 
     return 0;
 }
@@ -594,62 +593,62 @@ static int tilidd_suspend(struct device* dev)
 static int tilidd_resume(struct device* dev)
 {
     printk("tilidd_resume\n");
-//	struct llid_par* item = (struct llid_par9*)dev->dev.platform_data;
+//  struct llid_par* item = (struct llid_par9*)dev->dev.platform_data;
 
-//	console_lock();
+//  console_lock();
     pm_runtime_get_sync(dev);
-//	msleep(1);
+//  msleep(1);
 
-//	lcd_context_restore(item);
+//  lcd_context_restore(item);
 
     // Do SSD1289 setup
-//	ssd1289_setup(item);
+//  ssd1289_setup(item);
 
     // Set up LCD coordinates as necessary
-//	panel_reg_set(item, SSD1289_REG_GDDRAM_X_ADDR, 0);
-//	panel_reg_set(item, SSD1289_REG_GDDRAM_Y_ADDR, 0);
-//	lcdc_write(item,SSD1289_REG_GDDRAM_DATA, LCD_LIDD_CS0_ADDR);	//set up for data before DMA begins
-//	fb_set_suspend(item->info, 0);
-//	ssd1289_dma_setstatus(item, 1);	//enable DMA
-//	console_unlock();
+//  panel_reg_set(item, SSD1289_REG_GDDRAM_X_ADDR, 0);
+//  panel_reg_set(item, SSD1289_REG_GDDRAM_Y_ADDR, 0);
+//  lcdc_write(item,SSD1289_REG_GDDRAM_DATA, LCD_LIDD_CS0_ADDR);    //set up for data before DMA begins
+//  fb_set_suspend(item->info, 0);
+//  ssd1289_dma_setstatus(item, 1); //enable DMA
+//  console_unlock();
 //
-//	dev_dbg(&dev->dev,"Resumed.");
+//  dev_dbg(&dev->dev,"Resumed.");
     return 0;
 }
 
 //static void lcd_context_save(struct lidd_par* item)
 //{
 //    printk("lcd_context_save\n");
-//	reg_context.clk_enable = lcdc_read(item,LCD_CLK_ENABLE_REG);
-//	reg_context.ctrl = lcdc_read(item,LCD_CTRL);
-//	reg_context.dma_ctrl = lcdc_read(item,LCD_DMA_CTRL_REG);
-//	reg_context.int_enable_set = lcdc_read(item,LCD_INT_ENABLE_SET_REG);
-//	reg_context.dma_frm_buf_base_addr_0 =
-//		lcdc_read(item,LCD_DMA_FRM_BUF_BASE_ADDR_0_REG);
-//	reg_context.dma_frm_buf_ceiling_addr_0 =
-//		lcdc_read(item,LCD_DMA_FRM_BUF_CEILING_ADDR_0_REG);
-//	reg_context.dma_frm_buf_base_addr_1 =
-//		lcdc_read(item,LCD_DMA_FRM_BUF_BASE_ADDR_1_REG);
-//	reg_context.dma_frm_buf_ceiling_addr_1 =
-//		lcdc_read(item,LCD_DMA_FRM_BUF_CEILING_ADDR_1_REG);
+//  reg_context.clk_enable = lcdc_read(item,LCD_CLK_ENABLE_REG);
+//  reg_context.ctrl = lcdc_read(item,LCD_CTRL);
+//  reg_context.dma_ctrl = lcdc_read(item,LCD_DMA_CTRL_REG);
+//  reg_context.int_enable_set = lcdc_read(item,LCD_INT_ENABLE_SET_REG);
+//  reg_context.dma_frm_buf_base_addr_0 =
+//      lcdc_read(item,LCD_DMA_FRM_BUF_BASE_ADDR_0_REG);
+//  reg_context.dma_frm_buf_ceiling_addr_0 =
+//      lcdc_read(item,LCD_DMA_FRM_BUF_CEILING_ADDR_0_REG);
+//  reg_context.dma_frm_buf_base_addr_1 =
+//      lcdc_read(item,LCD_DMA_FRM_BUF_BASE_ADDR_1_REG);
+//  reg_context.dma_frm_buf_ceiling_addr_1 =
+//      lcdc_read(item,LCD_DMA_FRM_BUF_CEILING_ADDR_1_REG);
 //    return;
 //}
 
 //static void lcd_context_restore(struct lidd_par* item)
 //{
 //    printk("lcd_context_restore\n");
-//	lcdc_write(item,reg_context.clk_enable, LCD_CLK_ENABLE_REG);
-//	lcdc_write(item,reg_context.ctrl, LCD_CTRL);
-//	lcdc_write(item,reg_context.dma_ctrl, LCD_DMA_CTRL_REG);
-//	lcdc_write(item,reg_context.int_enable_set, LCD_INT_ENABLE_SET_REG);
-//	lcdc_write(item,reg_context.dma_frm_buf_base_addr_0,
-//			LCD_DMA_FRM_BUF_BASE_ADDR_0_REG);
-//	lcdc_write(item,reg_context.dma_frm_buf_ceiling_addr_0,
-//			LCD_DMA_FRM_BUF_CEILING_ADDR_0_REG);
-//	lcdc_write(item,reg_context.dma_frm_buf_base_addr_1,
-//			LCD_DMA_FRM_BUF_BASE_ADDR_1_REG);
-//	lcdc_write(item,reg_context.dma_frm_buf_ceiling_addr_1,
-//			LCD_DMA_FRM_BUF_CEILING_ADDR_1_REG);
+//  lcdc_write(item,reg_context.clk_enable, LCD_CLK_ENABLE_REG);
+//  lcdc_write(item,reg_context.ctrl, LCD_CTRL);
+//  lcdc_write(item,reg_context.dma_ctrl, LCD_DMA_CTRL_REG);
+//  lcdc_write(item,reg_context.int_enable_set, LCD_INT_ENABLE_SET_REG);
+//  lcdc_write(item,reg_context.dma_frm_buf_base_addr_0,
+//          LCD_DMA_FRM_BUF_BASE_ADDR_0_REG);
+//  lcdc_write(item,reg_context.dma_frm_buf_ceiling_addr_0,
+//          LCD_DMA_FRM_BUF_CEILING_ADDR_0_REG);
+//  lcdc_write(item,reg_context.dma_frm_buf_base_addr_1,
+//          LCD_DMA_FRM_BUF_BASE_ADDR_1_REG);
+//  lcdc_write(item,reg_context.dma_frm_buf_ceiling_addr_1,
+//          LCD_DMA_FRM_BUF_CEILING_ADDR_1_REG);
 //    return;
 //}
 
@@ -681,7 +680,7 @@ static void st7789v_setup(struct lidd_par* item)
     reg_write(item, LCD_LIDD_CS0_ADDR, ST7789V_SLPOUT);
     msleep(120);
 
-    panel_reg_set(item, ST7789V_MADCTL, 0x20);
+    panel_reg_set(item, ST7789V_MADCTL, 0x00);
     panel_reg_set(item, ST7789V_COLMOD, 0x55);
     panel_regs_set(item, ST7789V_PORCTRL, porctrl, ARRAY_SIZE(porctrl));
     panel_reg_set(item, ST7789V_GCTRL, 0x00);
@@ -702,13 +701,12 @@ static void st7789v_setup(struct lidd_par* item)
     st7789v_SetFrameDimensions(item, 0, 0);
 }
 
-static int panel_setcolreg(unsigned regno, unsigned red, unsigned green,
-                             unsigned blue, unsigned transp,
-                             struct fb_info* info)
+static int fb_setcolreg(unsigned regno, unsigned red, unsigned green, unsigned blue, unsigned transp, struct fb_info* info)
 {
     struct lidd_par* par = info->par;
     int ret = 0;
 
+    printk("fb_setcolreg\n");
     if ((regno >= 16) || (info->fix.visual == FB_VISUAL_DIRECTCOLOR))
     {
         ret = 1;
@@ -743,6 +741,16 @@ static int fb_ioctl(struct fb_info* info, unsigned int cmd, unsigned long arg)
     }
 }
 
+static void fb_fillrect(struct fb_info *p, const struct fb_fillrect *rect)
+{
+    printk("fb_fillrect - NOT IMPLEMENTED\n");
+}
+
+static void fb_copyarea(struct fb_info *p, const struct fb_copyarea *area)
+{
+    printk("fb_copyarea - NOT IMPLEMENTED\n");
+}
+
 static void st7789v_SetFrameDimensions(struct lidd_par* item, uint16_t Xpos, uint16_t Ypos)
 {
     uint16_t params[4];
@@ -759,12 +767,6 @@ static void st7789v_SetFrameDimensions(struct lidd_par* item, uint16_t Xpos, uin
     params[2] = SET_VALHI(end);
     params[3] = SET_VALLO(end);
     panel_regs_set(item, ST7789V_RASET, params, ARRAY_SIZE(params));
-}
-
-static void st7789v_StartFrame(struct lidd_par* item)
-{
-    reg_write(item, LCD_LIDD_CS0_ADDR, ST7789V_RAMWR);
-    lidd_dma_setstatus(item, 1);
 }
 
 module_init(tilidd_fb_init);
