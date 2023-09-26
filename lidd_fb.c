@@ -91,7 +91,8 @@ static struct fb_fix_screeninfo panel_fix =
     .type        = FB_TYPE_PACKED_PIXELS,
     .visual      = FB_VISUAL_TRUECOLOR,
     .accel       = FB_ACCEL_NONE,
-    .line_length = LCD_SCREEN_WIDTH * 2,
+    // Add * 4 becuase of the wasted 8 bits in each 16 bit word.
+    .line_length = LCD_SCREEN_WIDTH * 4,
 };
 
 static struct fb_var_screeninfo panel_var =
@@ -429,8 +430,7 @@ static int lidd_video_alloc(struct lidd_par* item)
     int ret = 0;
     struct platform_device* pdev = item->pdev;
     // Reserve DMA-able RAM, set up fix.
-    // Add * 2 becuase of the wasted 8 bits in each 16 bit word.
-    item->vram_size = (item->info->fix.line_length * item->info->var.yres * 2);
+    item->vram_size = (item->info->fix.line_length * item->info->var.yres);
     item->vram_virt = dma_alloc_coherent(&pdev->dev, item->vram_size, (resource_size_t*) &item->vram_phys, GFP_KERNEL | GFP_DMA);
     if (!item->vram_virt)
     {
@@ -706,7 +706,6 @@ static int fb_setcolreg(unsigned regno, unsigned red, unsigned green, unsigned b
     struct lidd_par* par = info->par;
     int ret = 0;
 
-    printk("fb_setcolreg\n");
     if ((regno >= 16) || (info->fix.visual == FB_VISUAL_DIRECTCOLOR))
     {
         ret = 1;

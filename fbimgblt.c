@@ -112,7 +112,8 @@ static inline void color_imageblit(const struct fb_image *image,
 			color <<= FB_LEFT_POS(p, bpp);
 			val |= FB_SHIFT_HIGH(p, color, shift ^ bswapmask);
 			if (shift >= null_bits) {
-				FB_WRITEL(val, dst++);
+				FB_WRITEL(val, dst);
+				dst += 2;
 	
 				val = (shift == null_bits) ? 0 : 
 					FB_SHIFT_LOW(p, color, 32 - shift);
@@ -179,7 +180,8 @@ static inline void slow_imageblit(const struct fb_image *image, struct fb_info *
 			
 			/* Did the bitshift spill bits to the next long? */
 			if (shift >= null_bits) {
-				FB_WRITEL(val, dst++);
+				FB_WRITEL(val, dst);
+				dst += 2;
 				val = (shift == null_bits) ? 0 :
 					FB_SHIFT_LOW(p, color, 32 - shift);
 			}
@@ -227,7 +229,6 @@ static inline void fast_imageblit(const struct fb_image *image, struct fb_info *
 	u32 __iomem *dst;
 	const u32 *tab = NULL;
 	int i, j, k;
-
 	switch (bpp) {
 	case 8:
 		tab = fb_be_math(p) ? cfb_tab8_be : cfb_tab8_le;
@@ -258,7 +259,8 @@ static inline void fast_imageblit(const struct fb_image *image, struct fb_info *
 		for (j = k; j--; ) {
 			shift -= ppw;
 			end_mask = tab[(*src >> shift) & bit_mask];
-			FB_WRITEL((end_mask & eorx)^bgx, dst++);
+			FB_WRITEL((end_mask & eorx)^bgx, dst);
+			dst += 2;
 			if (!shift) { shift = 8; src++; }		
 		}
 		dst1 += p->fix.line_length;
@@ -277,7 +279,7 @@ void fb_imageblit(struct fb_info *p, const struct fb_image *image)
 	if (p->state != FBINFO_STATE_RUNNING)
 		return;
 
-	bitstart = (dy * p->fix.line_length * 8) + (dx * bpp);
+	bitstart = (dy * p->fix.line_length * 8) + (dx * bpp * 2);
 	start_index = bitstart & (32 - 1);
 	pitch_index = (p->fix.line_length & (bpl - 1)) * 8;
 
@@ -300,7 +302,7 @@ void fb_imageblit(struct fb_info *p, const struct fb_image *image)
 		
 		if (32 % bpp == 0 && !start_index && !pitch_index && 
 		    ((width & (32/bpp-1)) == 0) &&
-		    bpp >= 8 && bpp <= 32) 			
+		    bpp >= 8 && bpp <= 32)
 			fast_imageblit(image, p, dst1, fgcolor, bgcolor);
 		else 
 			slow_imageblit(image, p, dst1, fgcolor, bgcolor,
@@ -316,6 +318,8 @@ static void lidd_fb_writel(u32 value, volatile void __iomem *addr)
     fb = (uint16_t*)addr;
     *(fb + 0) = SET_VALHI(value);
     *(fb + 1) = SET_VALLO(value);
+    *(fb + 2) = SET_VALHI(value >> 16);
+    *(fb + 3) = SET_VALLO(value >> 16);
 }
 
 static u32 lidd_fb_readl(volatile void __iomem *addr)
@@ -325,6 +329,8 @@ static u32 lidd_fb_readl(volatile void __iomem *addr)
     fb = (uint16_t*)addr;
     ret  = (*(fb + 0) & 0x00ff) << 8;
     ret |= (*(fb + 1) & 0x00ff) << 0;
+    ret |= (*(fb + 2) & 0x00ff) << 24;
+    ret |= (*(fb + 3) & 0x00ff) << 16;
     return ret;
 }
 
