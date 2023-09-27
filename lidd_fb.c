@@ -61,6 +61,7 @@ static int lidd_video_alloc(struct lidd_par* item);
 static int lcd_cfg_dma(struct lidd_par* item, int burst_size, int fifo_th);
 
 static void lidd_dma_setstatus(struct lidd_par* item, int doenable);
+static bool lidd_dma_getstatus(struct lidd_par* item);
 static irqreturn_t lidd_dma_irq_handler(int irq, void* arg);
 
 static void st7789v_setup(struct lidd_par* item);
@@ -119,7 +120,7 @@ static struct fb_var_screeninfo panel_var =
 };
 
 struct lidd_par* lidd_fb_priv;
-DECLARE_DELAYED_WORK(my_work, lidd_fb_startdma_worker);
+static DECLARE_DELAYED_WORK(my_work, lidd_fb_startdma_worker);
 
 #define SET_RGB(r,g,b)      ((((r) & 0x1f) << 11)|(((g) & 0x3f) << 5) | (((b) & 0x1f) << 0))
 
@@ -157,7 +158,10 @@ static void lidd_fb_startdma_worker(struct work_struct *work)
 {
     setframe(lidd_fb_priv, 0,0,0);
     reg_write(lidd_fb_priv, LCD_LIDD_CS0_ADDR, ST7789V_RAMWR);
-    lidd_dma_setstatus(lidd_fb_priv, 1);
+    if (lidd_fb_priv->first_update_done == true)
+    {
+        lidd_dma_setstatus(lidd_fb_priv, 1);
+    }
 }
 
 static int tilidd_pdev_probe(struct platform_device* pdev)
@@ -166,6 +170,7 @@ static int tilidd_pdev_probe(struct platform_device* pdev)
     struct lidd_par* priv;
     struct pinctrl* pinctrl;
     int ret = 0;
+    int irq;
     unsigned int signature;
     struct fb_info* info;
     struct gpio_desc* enable_gpio;
@@ -198,7 +203,6 @@ static int tilidd_pdev_probe(struct platform_device* pdev)
     priv = kzalloc(sizeof(*priv), GFP_KERNEL);
     if (!priv)
     {
-        kfree(priv);
         dev_err(&pdev->dev, "failed to allocate private data\n");
         ret = -ENOMEM;
         goto out;
@@ -309,8 +313,8 @@ static int tilidd_pdev_probe(struct platform_device* pdev)
     priv->pseudo_palette[1] = priv->pseudo_palette[7] = priv->pseudo_palette[15] = 0x0000ffff;
     info->pseudo_palette = priv->pseudo_palette;
 
-    priv->irq = platform_get_irq(pdev, 0);
-    if (priv->irq < 0)
+    irq = platform_get_irq(pdev, 0);
+    if (irq < 0)
     {
         ret = -ENOENT;
         goto out_info;
@@ -349,7 +353,7 @@ static int tilidd_pdev_probe(struct platform_device* pdev)
     dev_dbg(&pdev->dev, "Registered framebuffer.\n");
 
     // Try to get IRQ for DMA
-    ret = request_irq(priv->irq, lidd_dma_irq_handler, 0, DRIVER_NAME, priv);
+    ret = request_irq(irq, lidd_dma_irq_handler, 0, DRIVER_NAME, priv);
     if (ret)
     {
         ret = -EIO;
@@ -358,7 +362,14 @@ static int tilidd_pdev_probe(struct platform_device* pdev)
 
     dev_set_drvdata(&pdev->dev, priv);
     lidd_fb_priv = priv;
-    schedule_delayed_work(&my_work, 1);
+    lidd_fb_startdma_worker(NULL);
+    do
+    {
+        msleep(1);
+    } while (lidd_dma_getstatus(priv) == true);
+    reg_write(priv, LCD_LIDD_CS0_ADDR, ST7789V_DISPON);
+    priv->first_update_done = true;
+    schedule_delayed_work(&my_work, 0);
     pr_debug("Set drv data\n");
 
     return 0;
@@ -511,6 +522,11 @@ static irqreturn_t lidd_dma_irq_handler(int irq, void* arg)
 static void lidd_dma_setstatus(struct lidd_par* item, int doenable)
 {
     reg_write(item, LCD_LIDD_CTRL, (reg_read(item, LCD_LIDD_CTRL) & ~BIT(8)) | ((doenable & 1) << 8));
+}
+
+static bool lidd_dma_getstatus(struct lidd_par* item)
+{
+    return ((reg_read(item, LCD_LIDD_CTRL) & BIT(8)) == BIT(8)) ? true : false;
 }
 
 static int st7789v_suspend(struct platform_device* dev, pm_message_t state)
@@ -697,7 +713,6 @@ static void st7789v_setup(struct lidd_par* item)
     panel_regs_set(item, ST7789V_NVGAMCTRL, nvgamctrl, ARRAY_SIZE(nvgamctrl));
 
     reg_write(item, LCD_LIDD_CS0_ADDR, ST7789V_INVON);
-    reg_write(item, LCD_LIDD_CS0_ADDR, ST7789V_DISPON);
     st7789v_SetFrameDimensions(item, 0, 0);
 }
 

@@ -138,20 +138,4 @@ static inline void reg_clear(struct lidd_par* par, u32 reg, u32 mask)
     reg_write(par, reg, reg_read(par, reg) & ~mask);
 }
 
-/* the register to read/clear irqstatus differs between v1 and v2 of the IP */
-static inline u32 llid_irqstatus_reg(struct lidd_par* par)
-{
-    return (par->rev == 2) ? LCDC_MASKED_STAT_REG : LCDC_STAT_REG;
-}
-
-static inline u32 llid_read_irqstatus(struct lidd_par* par)
-{
-    return reg_read(par, llid_irqstatus_reg(par));
-}
-
-static inline void llid_clear_irqstatus(struct lidd_par* par, u32 mask)
-{
-    reg_write(par, llid_irqstatus_reg(par), mask);
-}
-
 #endif /* LIDD_FB_REGS_H_ */
