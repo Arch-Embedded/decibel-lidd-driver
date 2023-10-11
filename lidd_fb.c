@@ -51,6 +51,10 @@
 #define DRIVER_NAME "lidd-lcd"
 #define LCD_SCREEN_WIDTH     240
 #define LCD_SCREEN_HEIGHT    240
+#define LCD_BITS_PER_PIXEL   16
+#define LCD_BITS_PER_PIXEL   16
+#define LIDD_FB_EXTERNAL_INDEX  0 // index of the fb that is exposed externally like a normal framebuffer
+#define LIDD_FB_INTERNAL_INDEX  1 // index of the fb that is used internally with the 8bit gaps between each word
 
 static int tilidd_suspend(struct device* dev);
 static int tilidd_resume(struct device* dev);
@@ -61,7 +65,6 @@ static int lidd_video_alloc(struct lidd_par* item);
 static int lcd_cfg_dma(struct lidd_par* item, int burst_size, int fifo_th);
 
 static void lidd_dma_setstatus(struct lidd_par* item, int doenable);
-static bool lidd_dma_getstatus(struct lidd_par* item);
 static irqreturn_t lidd_dma_irq_handler(int irq, void* arg);
 
 static void st7789v_setup(struct lidd_par* item);
@@ -72,6 +75,9 @@ static int fb_setcolreg(unsigned regno, unsigned red, unsigned green, unsigned b
 static int fb_ioctl(struct fb_info* info, unsigned int cmd, unsigned long arg);
 static void fb_fillrect(struct fb_info *p, const struct fb_fillrect *rect);
 static void fb_copyarea(struct fb_info *p, const struct fb_copyarea *area);
+static ssize_t fb_read(struct fb_info *info, char __user *buf, size_t count, loff_t *ppos);
+static ssize_t fb_write(struct fb_info *info, const char __user *buf, size_t count, loff_t *ppos);
+static int fb_mmap(struct fb_info *info, struct vm_area_struct *vma);
 void fb_imageblit(struct fb_info *p, const struct fb_image *image);
 static void lidd_fb_startdma_worker(struct work_struct *work);
 
@@ -79,10 +85,13 @@ static struct fb_ops st7789v_fbops =
 {
     .owner        = THIS_MODULE,
     .fb_setcolreg = fb_setcolreg,
-    .fb_fillrect = fb_fillrect,
-    .fb_copyarea = fb_copyarea,
-    .fb_imageblit = fb_imageblit,
-    .fb_ioctl = fb_ioctl,
+    .fb_fillrect  = fb_fillrect,
+    .fb_copyarea  = fb_copyarea,
+    .fb_imageblit = cfb_imageblit,
+    .fb_write     = fb_write,
+    .fb_read      = fb_read,
+    .fb_ioctl     = fb_ioctl,
+    .fb_mmap      = fb_mmap,
 //  .fb_blank = sys_blank,
 };
 
@@ -92,8 +101,7 @@ static struct fb_fix_screeninfo panel_fix =
     .type        = FB_TYPE_PACKED_PIXELS,
     .visual      = FB_VISUAL_TRUECOLOR,
     .accel       = FB_ACCEL_NONE,
-    // Add * 4 becuase of the wasted 8 bits in each 16 bit word.
-    .line_length = LCD_SCREEN_WIDTH * 4,
+    .line_length = (LCD_SCREEN_WIDTH * LCD_BITS_PER_PIXEL) / 8
 };
 
 static struct fb_var_screeninfo panel_var =
@@ -102,7 +110,7 @@ static struct fb_var_screeninfo panel_var =
     .yres       = LCD_SCREEN_HEIGHT,
     .xres_virtual   = LCD_SCREEN_WIDTH,
     .yres_virtual   = LCD_SCREEN_HEIGHT,
-    .bits_per_pixel = 16,
+    .bits_per_pixel = LCD_BITS_PER_PIXEL,
     .red        = {11, 5, 0},
     .green      = {5, 6, 0},
     .blue       = {0, 5, 0},
@@ -122,46 +130,32 @@ static struct fb_var_screeninfo panel_var =
 struct lidd_par* lidd_fb_priv;
 static DECLARE_DELAYED_WORK(my_work, lidd_fb_startdma_worker);
 
-#define SET_RGB(r,g,b)      ((((r) & 0x1f) << 11)|(((g) & 0x3f) << 5) | (((b) & 0x1f) << 0))
-
-static void setframe(struct lidd_par* item, int r, int g, int b)
+// This kills the CPU but is required for apps that use a memory mapped framebuffer
+// TODO: Use the DMA engine (if possible) to get rid of this crap!
+static void setframe(struct lidd_par* item)
 {
-#if 0
-    int index = 0;
-    int x, y;
-    int c = 0;
-    static int o = 0;
-    uint16_t *colors = (uint16_t*)item->vram_virt;
-    o++;
-    for (x = 0; x < LCD_SCREEN_WIDTH; x++)
+    int i;
+    uint16_t *dst = (uint16_t*)item->dma_par[LIDD_FB_INTERNAL_INDEX].vram_virt;
+    uint16_t *src = (uint16_t*)item->dma_par[LIDD_FB_EXTERNAL_INDEX].vram_virt;
+    for (i = 0; i < (LCD_SCREEN_WIDTH * LCD_SCREEN_HEIGHT); i++)
     {
-        for (y = 0; y < LCD_SCREEN_HEIGHT; y++)
-        {
-            c = x + o;
-            if (y > (LCD_SCREEN_HEIGHT / 2))
-            {
-                colors[index++] = SET_VALHI(SET_RGB(0, c, 0));
-                colors[index++] = SET_VALLO(SET_RGB(0, c, 0));
-            }
-            else
-            {
-                colors[index++] = SET_VALHI(SET_RGB(c, g, 0x1f-c));
-                colors[index++] = SET_VALLO(SET_RGB(c, g, 0x1f-c));
-            }
-        }
+        *(dst + 0) = SET_VALHI(*src);
+        *(dst + 1) = SET_VALLO(*src);
+        src += 1;
+        dst += 2;
     }
-#endif
 }
-
 
 static void lidd_fb_startdma_worker(struct work_struct *work)
 {
-    setframe(lidd_fb_priv, 0,0,0);
+    setframe(lidd_fb_priv);
     reg_write(lidd_fb_priv, LCD_LIDD_CS0_ADDR, ST7789V_RAMWR);
-    if (lidd_fb_priv->first_update_done == true)
+    if (lidd_fb_priv->first_frame_done == true)
     {
         lidd_dma_setstatus(lidd_fb_priv, 1);
     }
+    lidd_fb_priv->first_frame_done = true;
+    wake_up_interruptible(&lidd_fb_priv->frame_done_wq);
 }
 
 static int tilidd_pdev_probe(struct platform_device* pdev)
@@ -338,8 +332,8 @@ static int tilidd_pdev_probe(struct platform_device* pdev)
     // Set up all kinds of fun DMA
     lcd_cfg_dma(priv, 16, 0);
     reg_write(priv, LCDC_INT_ENABLE_SET_REG, LCDC_FIFO_UNDERFLOW | LCDC_SYNC_LOST | LCDC_V2_DONE_INT_ENA);
-    reg_write(priv, LCDC_DMA_FB_BASE_ADDR_0_REG, priv->dma_start);
-    reg_write(priv, LCDC_DMA_FB_CEILING_ADDR_0_REG, priv->dma_end);
+    reg_write(priv, LCDC_DMA_FB_BASE_ADDR_0_REG, priv->dma_par[LIDD_FB_INTERNAL_INDEX].vram_phys);
+    reg_write(priv, LCDC_DMA_FB_CEILING_ADDR_0_REG, priv->dma_par[LIDD_FB_INTERNAL_INDEX].vram_phys + priv->dma_par[LIDD_FB_INTERNAL_INDEX].vram_size - 1);
 
     pr_debug("Finished video alloc\n");
 
@@ -360,15 +354,12 @@ static int tilidd_pdev_probe(struct platform_device* pdev)
         goto out_framebuffer;
     }
 
+    init_waitqueue_head(&priv->frame_done_wq);
     dev_set_drvdata(&pdev->dev, priv);
     lidd_fb_priv = priv;
     lidd_fb_startdma_worker(NULL);
-    do
-    {
-        msleep(1);
-    } while (lidd_dma_getstatus(priv) == true);
+    wait_event_interruptible_timeout(priv->frame_done_wq, priv->first_frame_done == true, msecs_to_jiffies(50));
     reg_write(priv, LCD_LIDD_CS0_ADDR, ST7789V_DISPON);
-    priv->first_update_done = true;
     schedule_delayed_work(&my_work, 0);
     pr_debug("Set drv data\n");
 
@@ -436,30 +427,45 @@ static int tilidd_pdev_remove(struct platform_device* pdev)
     return 0;
 }
 
-static int lidd_video_alloc(struct lidd_par* item)
+static int lidd_video_alloc_one(struct lidd_par* item, uint32_t line_length, uint32_t yres, struct lidd_dma_par *dma_par)
 {
     int ret = 0;
     struct platform_device* pdev = item->pdev;
-    // Reserve DMA-able RAM, set up fix.
-    item->vram_size = (item->info->fix.line_length * item->info->var.yres);
-    item->vram_virt = dma_alloc_coherent(&pdev->dev, item->vram_size, (resource_size_t*) &item->vram_phys, GFP_KERNEL | GFP_DMA);
-    if (!item->vram_virt)
+    dma_par->vram_size = (line_length * yres);
+    dma_par->vram_virt = dma_alloc_coherent(&pdev->dev, dma_par->vram_size, (resource_size_t*) &dma_par->vram_phys, GFP_KERNEL | GFP_DMA);
+    if (!dma_par->vram_virt)
     {
         dev_err(&pdev->dev, "%s: unable to vmalloc\n", __func__);
         ret = -ENOMEM;
     }
     else
     {
-        memset(item->vram_virt, 0, item->vram_size);
-        item->info->fix.smem_start = (unsigned long)(item->vram_virt);
-        item->info->fix.smem_len = item->vram_size;
+        memset(dma_par->vram_virt, 0xff, dma_par->vram_size);
+        printk("%s: DMA set from 0x%x->0x%x to 0x%lx, %ld bytes\n", __func__, dma_par->vram_phys, (uint32_t)dma_par->vram_virt, dma_par->vram_phys + dma_par->vram_size - 1, dma_par->vram_size);
+    }
+    return ret;
+}
 
-        item->info->screen_base = (char __iomem*)item->vram_virt;
-        item->info->screen_size = (unsigned int)item->vram_size;
-
-        item->dma_start = item->vram_phys;
-        item->dma_end   = item->dma_start + item->vram_size - 1;
-        printk("%s: DMA set from 0x%x to 0x%x, %ld bytes\n", __func__, item->dma_start, item->dma_end, item->vram_size);
+static int lidd_video_alloc(struct lidd_par* item)
+{
+    int ret = lidd_video_alloc_one(item, item->info->fix.line_length * 2, item->info->var.yres, &item->dma_par[LIDD_FB_INTERNAL_INDEX]);
+    if (ret == 0)
+    {
+        ret = lidd_video_alloc_one(item, item->info->fix.line_length, item->info->var.yres, &item->dma_par[LIDD_FB_EXTERNAL_INDEX]);
+        if (ret == 0)
+        {
+#if 1
+            item->info->fix.smem_start = (unsigned long)(item->dma_par[LIDD_FB_EXTERNAL_INDEX].vram_phys);
+            item->info->fix.smem_len = item->dma_par[LIDD_FB_EXTERNAL_INDEX].vram_size;
+            item->info->screen_base = (char __iomem*)item->dma_par[LIDD_FB_EXTERNAL_INDEX].vram_virt;
+            item->info->screen_size = (unsigned int)item->dma_par[LIDD_FB_EXTERNAL_INDEX].vram_size;
+#else
+            item->info->fix.smem_start = (unsigned long)(item->dma_par[LIDD_FB_INTERNAL_INDEX].vram_virt);
+            item->info->fix.smem_len = item->dma_par[LIDD_FB_INTERNAL_INDEX].vram_size;
+            item->info->screen_base = (char __iomem*)item->dma_par[LIDD_FB_INTERNAL_INDEX].vram_virt;
+            item->info->screen_size = (unsigned int)item->dma_par[LIDD_FB_INTERNAL_INDEX].vram_size;
+#endif
+        }
     }
     return ret;
 }
@@ -522,11 +528,6 @@ static irqreturn_t lidd_dma_irq_handler(int irq, void* arg)
 static void lidd_dma_setstatus(struct lidd_par* item, int doenable)
 {
     reg_write(item, LCD_LIDD_CTRL, (reg_read(item, LCD_LIDD_CTRL) & ~BIT(8)) | ((doenable & 1) << 8));
-}
-
-static bool lidd_dma_getstatus(struct lidd_par* item)
-{
-    return ((reg_read(item, LCD_LIDD_CTRL) & BIT(8)) == BIT(8)) ? true : false;
 }
 
 static int st7789v_suspend(struct platform_device* dev, pm_message_t state)
@@ -720,20 +721,19 @@ static int fb_setcolreg(unsigned regno, unsigned red, unsigned green, unsigned b
 {
     struct lidd_par* par = info->par;
     int ret = 0;
-
     if ((regno >= 16) || (info->fix.visual == FB_VISUAL_DIRECTCOLOR))
     {
         ret = 1;
     }
-    else if ((info->var.bits_per_pixel == 16) && regno < 16)
+    else if ((info->var.bits_per_pixel == LCD_BITS_PER_PIXEL) && regno < 16)
     {
-        red >>= (16 - info->var.red.length);
+        red >>= (LCD_BITS_PER_PIXEL - info->var.red.length);
         red <<= info->var.red.offset;
 
-        green >>= (16 - info->var.green.length);
+        green >>= (LCD_BITS_PER_PIXEL - info->var.green.length);
         green <<= info->var.green.offset;
 
-        blue >>= (16 - info->var.blue.length);
+        blue >>= (LCD_BITS_PER_PIXEL - info->var.blue.length);
         blue <<= info->var.blue.offset;
 
         par->pseudo_palette[regno] = red | green | blue;
@@ -763,6 +763,24 @@ static void fb_fillrect(struct fb_info *p, const struct fb_fillrect *rect)
 static void fb_copyarea(struct fb_info *p, const struct fb_copyarea *area)
 {
     printk("fb_copyarea - NOT IMPLEMENTED\n");
+}
+
+static ssize_t fb_read(struct fb_info *info, char __user *buf, size_t count, loff_t *ppos)
+{
+    printk("fb_read\n");
+    return 0;
+}
+
+static ssize_t fb_write(struct fb_info *info, const char __user *buf, size_t count, loff_t *ppos)
+{
+    printk("fb_write\n");
+    return 0;
+}
+
+static int fb_mmap(struct fb_info *info, struct vm_area_struct *vma)
+{
+    int ret = vm_iomap_memory(vma, info->fix.smem_start, info->fix.smem_len);
+    return ret;
 }
 
 static void st7789v_SetFrameDimensions(struct lidd_par* item, uint16_t Xpos, uint16_t Ypos)

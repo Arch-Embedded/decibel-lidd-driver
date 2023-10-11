@@ -1,6 +1,6 @@
 .PHONY:all clean modules_install
 obj-m := liddfb.o
-liddfb-objs += lidd_fb.o fbimgblt.o
+liddfb-objs += lidd_fb.o
 
 ARCH=arm
 CROSS_COMPILE=arm-linux-gnueabihf-
