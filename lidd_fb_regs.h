@@ -48,6 +48,13 @@
 #define LCDC_INVERT_VSYNC                        BIT(20)
 #define LCDC_LPP_B10                             BIT(26)
 
+/* LIDD Control Register */
+#define LIDD_DMA_CS0_CS1                         BIT(9)
+#define LIDD_DMA_ENABLE_SHIFT                    (8)
+#define LIDD_DMA_ENABLE                          BIT(LIDD_DMA_ENABLE_SHIFT)
+#define LIDD_CS1_POLARITY                        BIT(7)
+#define LIDD_CS0_POLARITY                        BIT(6)
+
 /* LCD_CS_CONF position helpers */
 #define CONF_TA_POS 0
 #define R_HOLD_POS 2
@@ -94,6 +101,7 @@
 #define ST7789V_RDDID                0x04
 #define ST7789V_SLPOUT               0x11
 #define ST7789V_INVON                0x21
+#define ST7789V_DISPOFF              0x28
 #define ST7789V_DISPON               0x29
 #define ST7789V_CASET                0x2A
 #define ST7789V_RASET                0x2B
@@ -120,12 +128,12 @@
 
 static inline void reg_write(struct lidd_par* par, u32 reg, u32 data)
 {
-    iowrite32(data, par->mmio + reg);
+    __raw_writel(data, par->mmio + reg);
 }
 
 static inline u32 reg_read(struct lidd_par* par, u32 reg)
 {
-    return ioread32(par->mmio + reg);
+    return (u32)__raw_readl(par->mmio + reg);
 }
 
 static inline void reg_set(struct lidd_par* par, u32 reg, u32 mask)

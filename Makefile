@@ -2,8 +2,8 @@
 obj-m := liddfb.o
 liddfb-objs += lidd_fb.o
 
-ARCH=arm
-CROSS_COMPILE=arm-linux-gnueabihf-
+ARCH?=arm
+CROSS_COMPILE?=arm-linux-gnueabihf-
 KERNELDIR := ../linux
 PWD := $(shell pwd)
 WARN :=-Wall -Wstrict-prototypes -Wno-trigraphs -Wmissing-prototypes
