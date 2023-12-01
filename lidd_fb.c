@@ -77,7 +77,6 @@ static void fb_fillrect(struct fb_info *p, const struct fb_fillrect *rect);
 static void fb_copyarea(struct fb_info *p, const struct fb_copyarea *area);
 static ssize_t fb_read(struct fb_info *info, char __user *buf, size_t count, loff_t *ppos);
 static ssize_t fb_write(struct fb_info *info, const char __user *buf, size_t count, loff_t *ppos);
-static int fb_mmap(struct fb_info *info, struct vm_area_struct *vma);
 void fb_imageblit(struct fb_info *p, const struct fb_image *image);
 static void lidd_fb_startdma_worker(struct work_struct *work);
 
@@ -91,8 +90,7 @@ static struct fb_ops st7789v_fbops =
     .fb_write     = fb_write,
     .fb_read      = fb_read,
     .fb_ioctl     = fb_ioctl,
-    .fb_mmap      = fb_mmap,
-//  .fb_blank = sys_blank,
+    // .fb_blank     = sys_blank,
 };
 
 static struct fb_fix_screeninfo panel_fix =
@@ -775,12 +773,6 @@ static ssize_t fb_write(struct fb_info *info, const char __user *buf, size_t cou
 {
     printk("fb_write\n");
     return 0;
-}
-
-static int fb_mmap(struct fb_info *info, struct vm_area_struct *vma)
-{
-    int ret = vm_iomap_memory(vma, info->fix.smem_start, info->fix.smem_len);
-    return ret;
 }
 
 static void st7789v_SetFrameDimensions(struct lidd_par* item, uint16_t Xpos, uint16_t Ypos)
