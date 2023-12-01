@@ -24,8 +24,10 @@ struct lidd_par
     void __iomem* mmio;
     struct clk*   lcdc_clk;         //Power enable for the LCDC
     //DMA/Memory things
+    struct dma_chan *dma_channel;
     struct lidd_dma_par  dma_par[2];
     wait_queue_head_t frame_done_wq;
+    struct completion memcpy_compl;
     bool first_frame_done;
 };
 

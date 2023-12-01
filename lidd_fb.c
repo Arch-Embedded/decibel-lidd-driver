@@ -44,6 +44,7 @@
 #include <linux/consolemap.h>
 #include <linux/suspend.h>
 #include <linux/workqueue.h>
+#include <linux/dmaengine.h>
 
 #include "lidd_fb.h"
 #include "lidd_fb_regs.h"
@@ -55,6 +56,8 @@
 #define LCD_BITS_PER_PIXEL   16
 #define LIDD_FB_EXTERNAL_INDEX  0 // index of the fb that is exposed externally like a normal framebuffer
 #define LIDD_FB_INTERNAL_INDEX  1 // index of the fb that is used internally with the 8bit gaps between each word
+#define LCD_INTERFACE_WIDTH     8
+#define LIDD_FB_DMA_TIMEOUT     1000
 
 static int tilidd_suspend(struct device* dev);
 static int tilidd_resume(struct device* dev);
@@ -128,10 +131,120 @@ static struct fb_var_screeninfo panel_var =
 struct lidd_par* lidd_fb_priv;
 static DECLARE_DELAYED_WORK(my_work, lidd_fb_startdma_worker);
 
+
+
+static void lidd_fb_dma_tx_callback(void *dma_async_param, const struct dmaengine_result *result)
+{
+    struct lidd_par *priv = (struct lidd_par *)dma_async_param;
+//printk("%s\n", __func__);
+    if (result->result == DMA_TRANS_NOERROR)
+    {
+        complete(&priv->memcpy_compl);
+
+        /* Signal EOI to LCDC now that also DMA is complete */
+        reg_write(priv, LCDC_END_OF_INT_IND_REG, 0);
+    }
+    else
+    {
+        pr_err("%s: DMA error, result %d\n", __func__, result->result);
+    }
+}
+
+static int lidd_fb_prepare_dma(struct lidd_par *priv)
+{
+    int ret = -EINVAL;
+    struct dma_async_tx_descriptor *tx;
+    struct dma_chan *chan = priv->dma_channel;
+    struct dma_interleaved_template interleaved_template;
+
+    pr_info("priv addr: %08x\n", (u32)priv);
+
+    interleaved_template.src_start = priv->dma_par[LIDD_FB_EXTERNAL_INDEX].vram_phys;
+    interleaved_template.dst_start = priv->dma_par[LIDD_FB_INTERNAL_INDEX].vram_phys;
+
+    interleaved_template.numf = priv->dma_par[LIDD_FB_EXTERNAL_INDEX].vram_size;
+    interleaved_template.frame_size = 1;
+    interleaved_template.sgl[0].size = 1;
+    interleaved_template.sgl[0].icg = (LCD_BITS_PER_PIXEL - LCD_INTERFACE_WIDTH) / 8;
+
+    interleaved_template.dir = DMA_MEM_TO_MEM;
+    interleaved_template.src_sgl = false;
+    interleaved_template.src_inc = true;
+    interleaved_template.dst_sgl = true;
+    interleaved_template.dst_inc = true;
+
+    pr_info("chan addr: %08x\n", (u32)chan);
+    pr_info("chan device addr: %08x\n", (u32)chan->device);
+    pr_info("chan device->prep_interleaved: %08x\n", (u32)chan->device->device_prep_interleaved_dma);
+
+    tx = dmaengine_prep_interleaved_dma(chan, &interleaved_template, DMA_PREP_INTERRUPT | DMA_CTRL_ACK);
+    if (tx == NULL)
+    {
+        pr_err("%s: DMA interleaved prep error\n", __func__);
+    }
+    else
+    {
+        dma_cookie_t memcpy_dma_cookie;
+        tx->callback_result = lidd_fb_dma_tx_callback;
+        tx->callback_param = priv;
+
+        memcpy_dma_cookie = dmaengine_submit(tx);
+        if (dma_submit_error(memcpy_dma_cookie))
+        {
+            pr_err("%s: dmaengine_submit failed (%d)\n", __func__, memcpy_dma_cookie);
+        }
+        else
+        {
+            dma_async_issue_pending(chan);
+            if (wait_for_completion_timeout(&priv->memcpy_compl, msecs_to_jiffies(LIDD_FB_DMA_TIMEOUT)) == 0)
+            {
+                pr_err("%s: Timeout while waiting for DMA\n", __func__);
+                dmaengine_terminate_sync(chan);
+            }
+            else
+            {
+                enum dma_status status = dma_async_is_tx_complete(chan, memcpy_dma_cookie, NULL, NULL);
+                if (status != DMA_COMPLETE)
+                {
+                    pr_err("%s: DMA completion %s status\n", __func__,
+                           status == DMA_ERROR ? "error" : "busy");
+                    dmaengine_terminate_sync(chan);
+                }
+            }
+        }
+    }
+
+    return ret;
+}
+
+static int lidd_fb_setup_dma(struct lidd_par *priv)
+{
+    dma_cap_mask_t mask;
+
+    dma_cap_zero(mask);
+    dma_cap_set(DMA_INTERLEAVE, mask);
+    priv->dma_channel = dma_request_chan_by_mask(&mask);
+    if (IS_ERR(priv->dma_channel))
+    {
+        pr_err("%s: DMA channel request failed\n", __func__);
+        return PTR_ERR(priv->dma_channel);
+    }
+
+    pr_info("chan addr: %08x\n", (u32)priv->dma_channel);
+    pr_info("chan device addr: %08x\n", (u32)priv->dma_channel->device);
+    pr_info("chan device->prep_interleaved: %08x\n", (u32)priv->dma_channel->device->device_prep_interleaved_dma);
+
+    return 0;
+}
+
+#define DO_DMA_MEMCPY
 // This kills the CPU but is required for apps that use a memory mapped framebuffer
 // TODO: Use the DMA engine (if possible) to get rid of this crap!
 static void setframe(struct lidd_par* item)
 {
+#ifdef DO_DMA_MEMCPY
+    lidd_fb_prepare_dma(item);
+#else
     int i;
     uint16_t *dst = (uint16_t*)item->dma_par[LIDD_FB_INTERNAL_INDEX].vram_virt;
     uint16_t *src = (uint16_t*)item->dma_par[LIDD_FB_EXTERNAL_INDEX].vram_virt;
@@ -142,6 +255,7 @@ static void setframe(struct lidd_par* item)
         src += 1;
         dst += 2;
     }
+#endif
 }
 
 static void lidd_fb_startdma_worker(struct work_struct *work)
@@ -334,7 +448,16 @@ static int tilidd_pdev_probe(struct platform_device* pdev)
     reg_write(priv, LCDC_DMA_FB_CEILING_ADDR_0_REG, priv->dma_par[LIDD_FB_INTERNAL_INDEX].vram_phys + priv->dma_par[LIDD_FB_INTERNAL_INDEX].vram_size - 1);
 
     pr_debug("Finished video alloc\n");
-
+    ret = lidd_fb_setup_dma(priv);
+    if (ret)
+    {
+        pr_err("%s: DMA setup failed\n", __func__);
+        goto out_framebuffer;
+    }
+    else
+    {
+        pr_info("%s: DMA setup OK\n", __func__);
+    }
     ret = register_framebuffer(info);
     if (ret < 0)
     {
@@ -351,7 +474,7 @@ static int tilidd_pdev_probe(struct platform_device* pdev)
         ret = -EIO;
         goto out_framebuffer;
     }
-
+    init_completion(&priv->memcpy_compl);
     init_waitqueue_head(&priv->frame_done_wq);
     dev_set_drvdata(&pdev->dev, priv);
     lidd_fb_priv = priv;
@@ -517,6 +640,7 @@ static irqreturn_t lidd_dma_irq_handler(int irq, void* arg)
     }
     if (stat & LCDC_V2_DONE_INT_ENA)
     {
+        reg_write(item, LCDC_END_OF_INT_IND_REG, 0);
         lidd_dma_setstatus(item, 0);
         schedule_delayed_work(&my_work, 0);
     }
