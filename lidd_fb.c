@@ -667,7 +667,7 @@ static int tilidd_resume(struct device* dev)
 //    return;
 //}
 
-static void panel_regs_set(struct lidd_par* item, u8 reg, u16* values, int numValues)
+static void panel_regs_set(struct lidd_par* item, u8 reg, const u16* values, size_t numValues)
 {
     int i;
     reg_write(item, LCD_LIDD_CS0_ADDR, reg);
@@ -684,10 +684,10 @@ static void panel_reg_set(struct lidd_par* item, u8 reg, u16 value)
 
 static void st7789v_setup(struct lidd_par* item)
 {
-    u16 porctrl[] = { 0x0c, 0x0c, 0x00, 0x33, 0x33 };
-    u16 pwctrl1[] = { 0xA4, 0xA1 };
-    u16 pvgamctrl[] = { 0xf0, 0x08, 0x0E, 0x09, 0x08, 0x04, 0x2F, 0x33, 0x45, 0x36, 0x13, 0x12, 0x2A, 0x2D };
-    u16 nvgamctrl[] = { 0xf0, 0x0E, 0x12, 0x0C, 0x0A, 0x15, 0x2E, 0x32, 0x44, 0x39, 0x17, 0x18, 0x2B, 0x2F };
+    static const u16 porctrl[] = { 0x0c, 0x0c, 0x00, 0x33, 0x33 };
+    static const u16 pwctrl1[] = { 0xA4, 0xA1 };
+    static const u16 pvgamctrl[] = { 0xf0, 0x08, 0x0E, 0x09, 0x08, 0x04, 0x2F, 0x33, 0x45, 0x36, 0x13, 0x12, 0x2A, 0x2D };
+    static const u16 nvgamctrl[] = { 0xf0, 0x0E, 0x12, 0x0C, 0x0A, 0x15, 0x2E, 0x32, 0x44, 0x39, 0x17, 0x18, 0x2B, 0x2F };
 
     reg_write(item, LCD_LIDD_CS0_ADDR, ST7789V_SWRESET);
     msleep(120);
@@ -719,6 +719,7 @@ static int fb_setcolreg(unsigned regno, unsigned red, unsigned green, unsigned b
 {
     struct lidd_par* par = info->par;
     int ret = 0;
+
     if ((regno >= 16) || (info->fix.visual == FB_VISUAL_DIRECTCOLOR))
     {
         ret = 1;
