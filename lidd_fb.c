@@ -64,6 +64,7 @@ static int tilidd_resume(struct device* dev);
 static int lidd_video_alloc(struct lidd_par* item);
 static int lcd_cfg_dma(struct lidd_par* item, int burst_size, int fifo_th);
 
+static bool lidd_dma_getstatus(struct lidd_par* item);
 static void lidd_dma_setstatus(struct lidd_par* item, int doenable);
 static irqreturn_t lidd_dma_irq_handler(int irq, void* arg);
 
@@ -515,17 +516,32 @@ static irqreturn_t lidd_dma_irq_handler(int irq, void* arg)
     {
         printk(KERN_ERR "LCDC sync lost or underflow error occured\nNot sure what to do...\n");
     }
-    if (stat & LCDC_V2_DONE_INT_ENA)
+    if (stat & LCDC_V2_DONE_INT_ENA && lidd_dma_getstatus(item))
     {
         lidd_dma_setstatus(item, 0);
         schedule_delayed_work(&my_work, 0);
     }
+
     return IRQ_HANDLED;
+}
+
+static bool lidd_dma_getstatus(struct lidd_par* item)
+{
+    return !!(reg_read(item, LCD_LIDD_CTRL) & BIT(8));
 }
 
 static void lidd_dma_setstatus(struct lidd_par* item, int doenable)
 {
-    reg_write(item, LCD_LIDD_CTRL, (reg_read(item, LCD_LIDD_CTRL) & ~BIT(8)) | ((doenable & 1) << 8));
+    if (doenable)
+    {
+      reg_write(item, LCDC_INT_ENABLE_SET_REG, LCDC_FIFO_UNDERFLOW | LCDC_SYNC_LOST | LCDC_V2_DONE_INT_ENA);
+      reg_write(item, LCD_LIDD_CTRL, reg_read(item, LCD_LIDD_CTRL) | BIT(8));
+    }
+    else
+    {
+        reg_write(item, LCD_LIDD_CTRL, reg_read(item, LCD_LIDD_CTRL) & ~BIT(8));
+        reg_write(item, LCDC_INT_ENABLE_CLR_REG, LCDC_V2_DONE_INT_ENA);
+    }
 }
 
 static int st7789v_suspend(struct platform_device* dev, pm_message_t state)
