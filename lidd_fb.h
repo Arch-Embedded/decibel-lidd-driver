@@ -8,6 +8,9 @@
 #ifndef LIDD_FB_H_
 #define LIDD_FB_H_
 
+#include <linux/dmaengine.h>
+#include <linux/completion.h>
+
 struct lidd_dma_par
 {
     dma_addr_t    vram_phys;        //should be same as dma_start
@@ -27,6 +30,14 @@ struct lidd_par
     struct lidd_dma_par  dma_par[2];
     wait_queue_head_t frame_done_wq;
     bool first_frame_done;
+    // DMA things, keep these members together or else things blow up ;-) !
+    struct dma_chan* dma_channel;
+    dma_cookie_t cookie;
+    int tx_status;
+    int req_status;
+    struct completion memcpy_compl;
+    struct dma_interleaved_template xt;
+    struct data_chunk sg[2];
 };
 
 #define SET_VALHI(v)        (((v) & 0xff00) >> 8)

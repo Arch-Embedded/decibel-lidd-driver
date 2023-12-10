@@ -53,8 +53,12 @@
 #define LCD_SCREEN_HEIGHT    240
 #define LCD_BITS_PER_PIXEL   16
 #define LCD_BITS_PER_PIXEL   16
+#define LCD_INTERFACE_WIDTH  8
+#define LCD_DO_DMA_MEMCPY    1
+
 #define LIDD_FB_EXTERNAL_INDEX  0 // index of the fb that is exposed externally like a normal framebuffer
 #define LIDD_FB_INTERNAL_INDEX  1 // index of the fb that is used internally with the 8bit gaps between each word
+#define LIDD_FB_DMA_TIMEOUT 1000u
 
 static int tilidd_suspend(struct device* dev);
 static int tilidd_resume(struct device* dev);
@@ -64,6 +68,7 @@ static int tilidd_resume(struct device* dev);
 static int lidd_video_alloc(struct lidd_par* item);
 static int lcd_cfg_dma(struct lidd_par* item, int burst_size, int fifo_th);
 
+static bool lidd_dma_getstatus(struct lidd_par* item);
 static void lidd_dma_setstatus(struct lidd_par* item, int doenable);
 static irqreturn_t lidd_dma_irq_handler(int irq, void* arg);
 
@@ -128,9 +133,21 @@ static struct fb_var_screeninfo panel_var =
 struct lidd_par* lidd_fb_priv;
 static DECLARE_DELAYED_WORK(my_work, lidd_fb_startdma_worker);
 
+static void start_display(struct lidd_par *priv)
+{
+    // Even though the LIDD DMA should be disabled here, make sure
+    // we only execute this when DMA is not enabled.
+    if (!lidd_dma_getstatus(priv))
+    {
+        reg_write(priv, LCD_LIDD_CS0_ADDR, ST7789V_DISPON);
+        reg_write(priv, LCD_LIDD_CS0_ADDR, ST7789V_RAMWR);
+        lidd_dma_setstatus(priv, 1);
+    }
+}
+
+#if !LCD_DO_DMA_MEMCPY
 // This kills the CPU but is required for apps that use a memory mapped framebuffer
-// TODO: Use the DMA engine (if possible) to get rid of this crap!
-static void setframe(struct lidd_par* item)
+static void copy_frame(struct lidd_par* item)
 {
     int i;
     uint16_t *dst = (uint16_t*)item->dma_par[LIDD_FB_INTERNAL_INDEX].vram_virt;
@@ -142,18 +159,125 @@ static void setframe(struct lidd_par* item)
         src += 1;
         dst += 2;
     }
+
+    start_display(priv);
 }
+#else
+static void lidd_fb_dma_tx_callback(void *param)
+{
+    struct lidd_par *priv = (struct lidd_par *)param;
+
+    start_display(priv);
+
+    // We're done with the DMA, signal that we're done
+    complete(&priv->memcpy_compl);
+}
+
+static int lidd_fb_prepare_dma(struct lidd_par *priv)
+{
+    struct dma_async_tx_descriptor *tx;
+    struct dma_chan *chan = priv->dma_channel;
+    struct dma_interleaved_template *xt = &priv->xt;
+    enum dma_status status;
+    long ret;
+
+    xt->src_start = priv->dma_par[LIDD_FB_EXTERNAL_INDEX].vram_phys;
+    xt->dst_start = priv->dma_par[LIDD_FB_INTERNAL_INDEX].vram_phys;
+
+    xt->frame_size = 1;
+    xt->numf = priv->dma_par[LIDD_FB_EXTERNAL_INDEX].vram_size;
+    xt->sgl[0].size = 1;
+    xt->sgl[0].icg = (LCD_BITS_PER_PIXEL - LCD_INTERFACE_WIDTH) / 8;
+
+    xt->dir = DMA_MEM_TO_MEM;
+    xt->src_sgl = false;
+    xt->src_inc = true;
+    xt->dst_sgl = true;
+    xt->dst_inc = true;
+
+    tx = dmaengine_prep_interleaved_dma(chan, xt, DMA_PREP_INTERRUPT | DMA_CTRL_ACK);
+    if (tx == NULL)
+    {
+        pr_err("%s: DMA interleaved prep error\n", __func__);
+        return -EINVAL;
+    }
+
+    tx->callback = lidd_fb_dma_tx_callback;
+    tx->callback_param = priv;
+
+    reinit_completion(&priv->memcpy_compl);
+
+    priv->cookie = dmaengine_submit(tx);
+    if (dma_submit_error(priv->cookie))
+    {
+        pr_err("%s: dmaengine_submit failed (%d)\n", __func__, priv->cookie);
+        return -EINVAL;
+    }
+
+    dma_async_issue_pending(chan);
+
+    ret = wait_for_completion_interruptible_timeout(
+            &priv->memcpy_compl,
+            msecs_to_jiffies(LIDD_FB_DMA_TIMEOUT));
+    if (ret <= 0)
+    {
+        if (ret < 0)
+        {
+            pr_err("%s: Interrupted while waiting for DMA to finish\n", __func__);
+        }
+        else
+        {
+            pr_err("%s: Timeout while waiting for DMA\n", __func__);
+            ret = -ETIMEDOUT;
+        }
+        dmaengine_terminate_sync(chan);
+        return ret;
+    }
+
+    status = dma_async_is_tx_complete(chan, priv->cookie, NULL, NULL);
+    if (status != DMA_COMPLETE)
+    {
+        pr_err("%s: DMA completion %s status\n", __func__,
+               status == DMA_ERROR ? "error" : "busy");
+        dmaengine_terminate_sync(chan);
+        return -EINVAL;
+    }
+
+    return 0;
+}
+
+static int lidd_fb_setup_dma(struct lidd_par *priv)
+{
+    dma_cap_mask_t mask;
+
+    init_completion(&priv->memcpy_compl);
+
+    dma_cap_zero(mask);
+    dma_cap_set(DMA_INTERLEAVE, mask);
+    priv->dma_channel = dma_request_chan_by_mask(&mask);
+    if (IS_ERR(priv->dma_channel))
+    {
+        pr_err("%s: DMA channel request failed\n", __func__);
+        return PTR_ERR(priv->dma_channel);
+    }
+
+    return 0;
+}
+#endif
 
 static void lidd_fb_startdma_worker(struct work_struct *work)
 {
-    setframe(lidd_fb_priv);
-    reg_write(lidd_fb_priv, LCD_LIDD_CS0_ADDR, ST7789V_RAMWR);
-    if (lidd_fb_priv->first_frame_done == true)
+#if LCD_DO_DMA_MEMCPY
+    lidd_fb_prepare_dma(lidd_fb_priv);
+#else
+    copy_frame(lidd_fb_priv);
+#endif
+    // We're done with copying, signal that we're done
+    if (!lidd_fb_priv->first_frame_done)
     {
-        lidd_dma_setstatus(lidd_fb_priv, 1);
+        lidd_fb_priv->first_frame_done = true;
+        wake_up_interruptible(&lidd_fb_priv->frame_done_wq);
     }
-    lidd_fb_priv->first_frame_done = true;
-    wake_up_interruptible(&lidd_fb_priv->frame_done_wq);
 }
 
 static int tilidd_pdev_probe(struct platform_device* pdev)
@@ -166,6 +290,7 @@ static int tilidd_pdev_probe(struct platform_device* pdev)
     unsigned int signature;
     struct fb_info* info;
     struct gpio_desc* enable_gpio;
+
     enable_gpio = devm_gpiod_get_optional(&pdev->dev, "enable", GPIOD_OUT_HIGH);
     if (IS_ERR(enable_gpio))
     {
@@ -192,16 +317,16 @@ static int tilidd_pdev_probe(struct platform_device* pdev)
 
     pr_debug("End of Initializing pins");
 
-    priv = kzalloc(sizeof(*priv), GFP_KERNEL);
-    if (!priv)
+    info = framebuffer_alloc(sizeof(struct lidd_par), &pdev->dev);
+    if (!info)
     {
-        dev_err(&pdev->dev, "failed to allocate private data\n");
         ret = -ENOMEM;
+        dev_err(&pdev->dev, "%s: unable to framebuffer_alloc\n", __func__);
         goto out;
     }
+    pr_debug("Framebuffer allocated\n");
 
-    pr_debug("Kzalloc allocated\n");
-
+    lidd_fb_priv = priv = info->par;
     priv->pdev = pdev;
 
     pr_debug("platform pdev handler assigned to priv->pdev\n");
@@ -211,7 +336,7 @@ static int tilidd_pdev_probe(struct platform_device* pdev)
     {
         dev_err(&pdev->dev, "failed to get memory resource\n");
         ret = -ENOENT;
-        goto out_item;
+        goto out_info;
     }
 
     pr_debug("Platform get resource finished\n");
@@ -221,10 +346,10 @@ static int tilidd_pdev_probe(struct platform_device* pdev)
     {
         dev_err(&pdev->dev, "failed to ioremap\n");
         ret = -EINVAL;
-        goto out_item;
+        goto out_info;
     }
 
-    pr_debug("Remaping nocache finished\n");
+    pr_debug("Remaping finished\n");
 
     priv->lcdc_clk = clk_get(&pdev->dev, "fck");
     if (IS_ERR(priv->lcdc_clk))
@@ -287,17 +412,7 @@ static int tilidd_pdev_probe(struct platform_device* pdev)
     pr_debug("Initialized LCDC controller");
     st7789v_setup(priv);
 
-    info = framebuffer_alloc(sizeof(struct lidd_par), &pdev->dev);
-    if (!info)
-    {
-        ret = -ENOMEM;
-        dev_err(&pdev->dev, "%s: unable to framebuffer_alloc\n", __func__);
-        goto out_clk_enable;
-    }
-    pr_debug("Framebuffer allocated\n");
-
     priv->info = info;
-    info->par = priv;
     info->fbops = &st7789v_fbops;
 
     // Palette setup
@@ -309,7 +424,7 @@ static int tilidd_pdev_probe(struct platform_device* pdev)
     if (irq < 0)
     {
         ret = -ENOENT;
-        goto out_info;
+        goto out_clk_enable;
     }
 
     pr_debug("End of get irq\n");
@@ -324,16 +439,29 @@ static int tilidd_pdev_probe(struct platform_device* pdev)
     {
         ret = -ENOMEM;
         dev_err(&pdev->dev, "%s: unable to ldd_video_alloc\n", __func__);
-        goto out_info;
+        goto out_clk_enable;
     }
 
     // Set up all kinds of fun DMA
     lcd_cfg_dma(priv, 16, 0);
-    reg_write(priv, LCDC_INT_ENABLE_SET_REG, LCDC_FIFO_UNDERFLOW | LCDC_SYNC_LOST | LCDC_V2_DONE_INT_ENA);
     reg_write(priv, LCDC_DMA_FB_BASE_ADDR_0_REG, priv->dma_par[LIDD_FB_INTERNAL_INDEX].vram_phys);
     reg_write(priv, LCDC_DMA_FB_CEILING_ADDR_0_REG, priv->dma_par[LIDD_FB_INTERNAL_INDEX].vram_phys + priv->dma_par[LIDD_FB_INTERNAL_INDEX].vram_size - 1);
+    reg_write(priv, LCDC_INT_ENABLE_SET_REG, LCDC_FIFO_UNDERFLOW | LCDC_SYNC_LOST | LCDC_V2_DONE_INT_ENA);
 
     pr_debug("Finished video alloc\n");
+
+#if LCD_DO_DMA_MEMCPY
+    ret = lidd_fb_setup_dma(priv);
+    if (ret)
+    {
+        dev_err(&pdev->dev, "%s: unable to setup DMA\n", __func__);
+        goto out_pages;
+    }
+#endif
+
+    init_waitqueue_head(&priv->frame_done_wq);
+    dev_set_drvdata(&pdev->dev, priv);
+    pr_debug("Set drv data\n");
 
     ret = register_framebuffer(info);
     if (ret < 0)
@@ -352,23 +480,13 @@ static int tilidd_pdev_probe(struct platform_device* pdev)
         goto out_framebuffer;
     }
 
-    init_waitqueue_head(&priv->frame_done_wq);
-    dev_set_drvdata(&pdev->dev, priv);
-    lidd_fb_priv = priv;
-    lidd_fb_startdma_worker(NULL);
-    wait_event_interruptible_timeout(priv->frame_done_wq, priv->first_frame_done == true, msecs_to_jiffies(50));
-    reg_write(priv, LCD_LIDD_CS0_ADDR, ST7789V_DISPON);
-    schedule_delayed_work(&my_work, 0);
-    pr_debug("Set drv data\n");
-
     return 0;
 
 out_framebuffer:
     unregister_framebuffer(info);
 out_pages:
-    kfree((void*)priv->info->fix.smem_start);
-out_info:
-    framebuffer_release(info);
+    // not needed, allocated with dmam*, iow managed version
+    // kfree((void*)priv->info->fix.smem_start);
 out_clk_enable:
     clk_disable(priv->lcdc_clk);
 err_clk_get:
@@ -377,8 +495,8 @@ err_clk_get:
     clk_put(priv->lcdc_clk);
 out_ioremap:
     iounmap(priv->mmio);
-out_item:
-    kfree(priv);
+out_info:
+    framebuffer_release(info);
 out:
     printk(KERN_EMERG "failed to probe/init lidd driver\n");
     return ret;
@@ -430,7 +548,7 @@ static int lidd_video_alloc_one(struct lidd_par* item, uint32_t line_length, uin
     int ret = 0;
     struct platform_device* pdev = item->pdev;
     dma_par->vram_size = (line_length * yres);
-    dma_par->vram_virt = dma_alloc_coherent(&pdev->dev, dma_par->vram_size, (resource_size_t*) &dma_par->vram_phys, GFP_KERNEL | GFP_DMA);
+    dma_par->vram_virt = dmam_alloc_coherent(&pdev->dev, dma_par->vram_size, (resource_size_t*) &dma_par->vram_phys, GFP_KERNEL | GFP_DMA);
     if (!dma_par->vram_virt)
     {
         dev_err(&pdev->dev, "%s: unable to vmalloc\n", __func__);
@@ -515,17 +633,32 @@ static irqreturn_t lidd_dma_irq_handler(int irq, void* arg)
     {
         printk(KERN_ERR "LCDC sync lost or underflow error occured\nNot sure what to do...\n");
     }
-    if (stat & LCDC_V2_DONE_INT_ENA)
+    if (stat & LCDC_V2_DONE_INT_ENA && lidd_dma_getstatus(item))
     {
         lidd_dma_setstatus(item, 0);
         schedule_delayed_work(&my_work, 0);
     }
+
     return IRQ_HANDLED;
+}
+
+static bool lidd_dma_getstatus(struct lidd_par* item)
+{
+    return !!(reg_read(item, LCD_LIDD_CTRL) & BIT(8));
 }
 
 static void lidd_dma_setstatus(struct lidd_par* item, int doenable)
 {
-    reg_write(item, LCD_LIDD_CTRL, (reg_read(item, LCD_LIDD_CTRL) & ~BIT(8)) | ((doenable & 1) << 8));
+    if (doenable)
+    {
+      reg_write(item, LCDC_INT_ENABLE_SET_REG, LCDC_FIFO_UNDERFLOW | LCDC_SYNC_LOST | LCDC_V2_DONE_INT_ENA);
+      reg_write(item, LCD_LIDD_CTRL, reg_read(item, LCD_LIDD_CTRL) | BIT(8));
+    }
+    else
+    {
+        reg_write(item, LCD_LIDD_CTRL, reg_read(item, LCD_LIDD_CTRL) & ~BIT(8));
+        reg_write(item, LCDC_INT_ENABLE_CLR_REG, LCDC_V2_DONE_INT_ENA);
+    }
 }
 
 static int st7789v_suspend(struct platform_device* dev, pm_message_t state)
@@ -667,7 +800,7 @@ static int tilidd_resume(struct device* dev)
 //    return;
 //}
 
-static void panel_regs_set(struct lidd_par* item, u8 reg, u16* values, int numValues)
+static void panel_regs_set(struct lidd_par* item, u8 reg, const u16* values, size_t numValues)
 {
     int i;
     reg_write(item, LCD_LIDD_CS0_ADDR, reg);
@@ -684,10 +817,13 @@ static void panel_reg_set(struct lidd_par* item, u8 reg, u16 value)
 
 static void st7789v_setup(struct lidd_par* item)
 {
-    u16 porctrl[] = { 0x0c, 0x0c, 0x00, 0x33, 0x33 };
-    u16 pwctrl1[] = { 0xA4, 0xA1 };
-    u16 pvgamctrl[] = { 0xf0, 0x08, 0x0E, 0x09, 0x08, 0x04, 0x2F, 0x33, 0x45, 0x36, 0x13, 0x12, 0x2A, 0x2D };
-    u16 nvgamctrl[] = { 0xf0, 0x0E, 0x12, 0x0C, 0x0A, 0x15, 0x2E, 0x32, 0x44, 0x39, 0x17, 0x18, 0x2B, 0x2F };
+    static const u16 porctrl[] = { 0x0c, 0x0c, 0x00, 0x33, 0x33 };
+    static const u16 pwctrl1[] = { 0xA4, 0xA1 };
+    static const u16 pvgamctrl[] = { 0xf0, 0x08, 0x0E, 0x09, 0x08, 0x04, 0x2F, 0x33, 0x45, 0x36, 0x13, 0x12, 0x2A, 0x2D };
+    static const u16 nvgamctrl[] = { 0xf0, 0x0E, 0x12, 0x0C, 0x0A, 0x15, 0x2E, 0x32, 0x44, 0x39, 0x17, 0x18, 0x2B, 0x2F };
+#if LCD_DO_DMA_MEMCPY
+    static const u16 ramctrl[] = { 0x00, 0xC8 };
+#endif
 
     reg_write(item, LCD_LIDD_CS0_ADDR, ST7789V_SWRESET);
     msleep(120);
@@ -697,6 +833,9 @@ static void st7789v_setup(struct lidd_par* item)
 
     panel_reg_set(item, ST7789V_MADCTL, 0x00);
     panel_reg_set(item, ST7789V_COLMOD, 0x55);
+#if LCD_DO_DMA_MEMCPY
+    panel_regs_set(item, ST7789V_RAMCTRL, ramctrl, ARRAY_SIZE(ramctrl));
+#endif
     panel_regs_set(item, ST7789V_PORCTRL, porctrl, ARRAY_SIZE(porctrl));
     panel_reg_set(item, ST7789V_GCTRL, 0x00);
     panel_reg_set(item, ST7789V_VCOMS, 0x36);
@@ -719,6 +858,7 @@ static int fb_setcolreg(unsigned regno, unsigned red, unsigned green, unsigned b
 {
     struct lidd_par* par = info->par;
     int ret = 0;
+
     if ((regno >= 16) || (info->fix.visual == FB_VISUAL_DIRECTCOLOR))
     {
         ret = 1;
@@ -736,6 +876,10 @@ static int fb_setcolreg(unsigned regno, unsigned red, unsigned green, unsigned b
 
         par->pseudo_palette[regno] = red | green | blue;
     }
+
+    lidd_fb_startdma_worker(NULL);
+    wait_event_interruptible_timeout(par->frame_done_wq, par->first_frame_done == true, msecs_to_jiffies(50));
+
     return ret;
 }
 
