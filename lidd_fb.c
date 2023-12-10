@@ -821,6 +821,9 @@ static void st7789v_setup(struct lidd_par* item)
     static const u16 pwctrl1[] = { 0xA4, 0xA1 };
     static const u16 pvgamctrl[] = { 0xf0, 0x08, 0x0E, 0x09, 0x08, 0x04, 0x2F, 0x33, 0x45, 0x36, 0x13, 0x12, 0x2A, 0x2D };
     static const u16 nvgamctrl[] = { 0xf0, 0x0E, 0x12, 0x0C, 0x0A, 0x15, 0x2E, 0x32, 0x44, 0x39, 0x17, 0x18, 0x2B, 0x2F };
+#if LCD_DO_DMA_MEMCPY
+    static const u16 ramctrl[] = { 0x00, 0xC8 };
+#endif
 
     reg_write(item, LCD_LIDD_CS0_ADDR, ST7789V_SWRESET);
     msleep(120);
@@ -830,6 +833,9 @@ static void st7789v_setup(struct lidd_par* item)
 
     panel_reg_set(item, ST7789V_MADCTL, 0x00);
     panel_reg_set(item, ST7789V_COLMOD, 0x55);
+#if LCD_DO_DMA_MEMCPY
+    panel_regs_set(item, ST7789V_RAMCTRL, ramctrl, ARRAY_SIZE(ramctrl));
+#endif
     panel_regs_set(item, ST7789V_PORCTRL, porctrl, ARRAY_SIZE(porctrl));
     panel_reg_set(item, ST7789V_GCTRL, 0x00);
     panel_reg_set(item, ST7789V_VCOMS, 0x36);

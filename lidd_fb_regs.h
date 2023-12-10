@@ -100,6 +100,7 @@
 #define ST7789V_RAMWR                0x2C
 #define ST7789V_MADCTL               0x36
 #define ST7789V_COLMOD               0x3A
+#define ST7789V_RAMCTRL              0xB0
 #define ST7789V_PORCTRL              0xB2
 #define ST7789V_GCTRL                0xB7
 #define ST7789V_VCOMS                0xBB
