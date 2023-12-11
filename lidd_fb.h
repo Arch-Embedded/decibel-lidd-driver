@@ -26,6 +26,7 @@ struct lidd_par
     u32 pseudo_palette[16];
     void __iomem* mmio;
     struct clk*   lcdc_clk;         //Power enable for the LCDC
+    struct backlight_device *backlight;
     //DMA/Memory things
     struct lidd_dma_par  dma_par[2];
     wait_queue_head_t frame_done_wq;

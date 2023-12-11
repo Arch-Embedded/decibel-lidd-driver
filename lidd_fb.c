@@ -44,6 +44,7 @@
 #include <linux/consolemap.h>
 #include <linux/suspend.h>
 #include <linux/workqueue.h>
+#include <linux/backlight.h>
 
 #include "lidd_fb.h"
 #include "lidd_fb_regs.h"
@@ -77,6 +78,7 @@ static void st7789v_setup(struct lidd_par* item);
 static void st7789v_SetFrameDimensions(struct lidd_par* item, uint16_t Xpos, uint16_t Ypos);
 
 static int fb_setcolreg(unsigned regno, unsigned red, unsigned green, unsigned blue, unsigned transp, struct fb_info* info);
+static int lidd_fb_blank(int blank_mode, struct fb_info *info);
 static int fb_ioctl(struct fb_info* info, unsigned int cmd, unsigned long arg);
 static void fb_fillrect(struct fb_info *p, const struct fb_fillrect *rect);
 static void fb_copyarea(struct fb_info *p, const struct fb_copyarea *area);
@@ -95,7 +97,7 @@ static struct fb_ops st7789v_fbops =
     .fb_write     = fb_write,
     .fb_read      = fb_read,
     .fb_ioctl     = fb_ioctl,
-    // .fb_blank     = sys_blank,
+    .fb_blank     = lidd_fb_blank,
 };
 
 static struct fb_fix_screeninfo panel_fix =
@@ -280,6 +282,20 @@ static void lidd_fb_startdma_worker(struct work_struct *work)
     }
 }
 
+static int lidd_fb_of_get_backlight(struct device *dev,
+                                   struct lidd_par *priv)
+{
+    struct backlight_device *backlight;
+
+    /* Look up the optional backlight device */
+    backlight = devm_of_find_backlight(dev);
+    if (IS_ERR(backlight))
+        return PTR_ERR(backlight);
+
+    priv->backlight = backlight;
+    return 0;
+}
+
 static int tilidd_pdev_probe(struct platform_device* pdev)
 {
     struct device_node* node = pdev->dev.of_node;
@@ -360,6 +376,14 @@ static int tilidd_pdev_probe(struct platform_device* pdev)
     }
 
     pr_debug("Functional clk finished\n");
+
+    ret = lidd_fb_of_get_backlight(&pdev->dev, priv);
+    if(ret)
+    {
+        dev_err(&pdev->dev, "failed to get backlight\n");
+        goto err_clk_get;
+    }
+    pr_debug("Backlight finished\n");
 
     pm_runtime_enable(&pdev->dev);
 
@@ -881,6 +905,30 @@ static int fb_setcolreg(unsigned regno, unsigned red, unsigned green, unsigned b
     wait_event_interruptible_timeout(par->frame_done_wq, par->first_frame_done == true, msecs_to_jiffies(50));
 
     return ret;
+}
+
+static int lidd_fb_blank(int blank_mode, struct fb_info *info)
+{
+    struct lidd_par* par = info->par;
+
+    if (blank_mode != 0)
+    {
+        if (par->backlight)
+        {
+            par->backlight->props.power = FB_BLANK_POWERDOWN;
+            backlight_update_status(par->backlight);
+        }
+    }
+    else
+    {
+        if (par->backlight)
+        {
+            par->backlight->props.power = FB_BLANK_UNBLANK;
+            backlight_update_status(par->backlight);
+        }
+    }
+
+    return 0;
 }
 
 static int fb_ioctl(struct fb_info* info, unsigned int cmd, unsigned long arg)
